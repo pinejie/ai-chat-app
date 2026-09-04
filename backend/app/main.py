@@ -6,6 +6,10 @@ import time
 import uuid
 import os
 from pathlib import Path
+from dotenv import load_dotenv
+
+# Load .env from backend directory
+load_dotenv(Path(__file__).resolve().parent.parent / '.env')
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
@@ -15,7 +19,8 @@ from typing import Optional
 
 logger = logging.getLogger("claude-bridge")
 
-WORKSPACE_DIR = os.getenv("WORKSPACE_DIR", "/home/wangg/workspace")
+WORKSPACE_DIR = os.getenv("WORKSPACE_DIR", os.path.expanduser("~/workspace"))
+ENV_PATH = Path(__file__).resolve().parent.parent / '.env'
 PROJECT_DIR = Path(__file__).resolve().parent.parent.parent
 STATIC_DIR = PROJECT_DIR / "frontend" / "static"
 DATA_DIR = PROJECT_DIR / "data" / "sessions"
@@ -278,7 +283,33 @@ async def index():
 
 @app.get("/api/health")
 def health():
-    return {"status": "ok", "active_sessions": len(sessions)}
+    return {"status": "ok", "active_sessions": len(sessions), "workspace": WORKSPACE_DIR}
+
+
+@app.post("/api/workspace")
+def update_workspace(body: dict):
+    global WORKSPACE_DIR
+    new_dir = body.get("workspace", "").strip()
+    if not new_dir:
+        raise HTTPException(400, "workspace is required")
+    new_dir = os.path.expanduser(new_dir)
+    WORKSPACE_DIR = new_dir
+    # Write to .env
+    lines = []
+    if ENV_PATH.exists():
+        with open(ENV_PATH, "r", encoding="utf-8") as f:
+            lines = f.readlines()
+    found = False
+    for i, line in enumerate(lines):
+        if line.strip().startswith("WORKSPACE_DIR="):
+            lines[i] = "WORKSPACE_DIR=" + new_dir + "\n"
+            found = True
+            break
+    if not found:
+        lines.append("WORKSPACE_DIR=" + new_dir + "\n")
+    with open(ENV_PATH, "w", encoding="utf-8") as f:
+        f.writelines(lines)
+    return {"workspace": WORKSPACE_DIR}
 
 
 @app.post("/api/sessions")
