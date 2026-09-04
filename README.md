@@ -43,7 +43,7 @@ ai-chat-app/
 
 ```bash
 cd backend
-uvicorn app.main:app --host 0.0.0.0 --port 8000
+nohup uvicorn app.main:app --host 0.0.0.0 --port 8000 > uvicorn.log 2>&1 &
 ```
 
 浏览器打开 http://localhost:8000 即可使用。
