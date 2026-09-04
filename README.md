@@ -42,8 +42,9 @@ ai-chat-app/
 ### 启动
 
 ```bash
-cd backend
-nohup uvicorn app.main:app --host 0.0.0.0 --port 8000 > uvicorn.log 2>&1 &
+./start.sh    # 启动
+./stop.sh     # 停止
+./restart.sh  # 重启
 ```
 
 浏览器打开 http://localhost:8000 即可使用。
