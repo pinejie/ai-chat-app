@@ -134,9 +134,19 @@ class SessionStore:
 class ClaudeSession:
     """Manages a Claude Code session using --resume for continuity"""
 
-    def __init__(self, session_id: str, workspace: str = WORKSPACE_DIR):
+    # Available permission modes
+    AVAILABLE_MODES = [
+        {"id": "default", "name": "默认", "description": "每次工具调用都询问权限"},
+        {"id": "acceptEdits", "name": "自动编辑", "description": "自动接受编辑，其他仍询问"},
+        {"id": "plan", "name": "计划模式", "description": "只分析规划，不执行操作"},
+        {"id": "auto", "name": "自动模式", "description": "自动处理大部分操作"},
+        {"id": "bypassPermissions", "name": "无限制", "description": "跳过所有权限检查"},
+    ]
+
+    def __init__(self, session_id: str, workspace: str = WORKSPACE_DIR, permission_mode: str = "bypassPermissions"):
         self.id = session_id
         self.workspace = workspace
+        self.permission_mode = permission_mode
         self.claude_session_id: Optional[str] = None
         self.websocket: Optional[WebSocket] = None
         self.process: Optional[asyncio.subprocess.Process] = None
@@ -162,9 +172,9 @@ class ClaudeSession:
             "-p",
             "--output-format", "stream-json",
             "--verbose",
-            "--permission-mode", "bypassPermissions",
-            "--dangerously-skip-permissions",
         ]
+
+        cmd.extend(["--permission-mode", self.permission_mode])
 
         if self.claude_session_id:
             cmd.extend(["--resume", self.claude_session_id])
@@ -286,6 +296,15 @@ def health():
     return {"status": "ok", "active_sessions": len(sessions), "workspace": WORKSPACE_DIR}
 
 
+
+
+
+@app.get("/api/modes")
+def get_modes():
+    """Return available permission modes."""
+    return ClaudeSession.AVAILABLE_MODES
+
+
 @app.post("/api/workspace")
 def update_workspace(body: dict):
     global WORKSPACE_DIR
@@ -364,6 +383,20 @@ async def stop_session(session_id: str):
             pass
     return {"ok": True}
 
+
+
+@app.post("/api/sessions/{session_id}/mode")
+def set_session_mode(session_id: str, body: dict):
+    """Set the permission mode for a session."""
+    session = sessions.get(session_id)
+    if not session:
+        raise HTTPException(404, "Session not found")
+    mode = body.get("mode", "").strip()
+    valid_ids = [m["id"] for m in ClaudeSession.AVAILABLE_MODES]
+    if mode not in valid_ids:
+        raise HTTPException(400, f"Invalid mode. Valid: {valid_ids}")
+    session.permission_mode = mode
+    return {"mode": mode}
 
 @app.websocket("/ws/{session_id}")
 async def websocket_endpoint(websocket: WebSocket, session_id: str):

@@ -94,15 +94,18 @@ body{height:100vh;display:flex;background:var(--bg);color:var(--text);font-famil
 .msg-stopped{text-align:center;font-size:12px;color:var(--warn);padding:4px}
 
 .input-area{border-top:1px solid var(--border);background:var(--bg2);padding:16px}
-.input-inner{max-width:800px;margin:0 auto;display:flex;gap:12px}
-.input-inner textarea{flex:1;resize:none;border-radius:12px;background:var(--bg3);border:1px solid var(--border2);padding:10px 14px;color:var(--text);font-size:13px;outline:none;font-family:inherit}
-.input-inner textarea:focus{border-color:var(--accent)}
-.input-inner textarea::placeholder{color:var(--text5)}
-.input-inner button{padding:10px 20px;background:var(--accent);border:none;border-radius:12px;color:#fff;font-size:13px;cursor:pointer;font-weight:500;white-space:nowrap}
-.input-inner button:hover{background:var(--accent2)}
-.input-inner button:disabled{background:var(--accent3);color:var(--text5);cursor:not-allowed}
-.input-inner .stop-btn{padding:10px 16px;background:var(--bg3);border:2px solid var(--danger);border-radius:12px;color:var(--danger);font-size:13px;cursor:pointer;font-weight:500;white-space:nowrap;display:none}
-.input-inner .stop-btn:hover{background:var(--danger);color:#fff}
+.input-inner{max-width:800px;margin:0 auto}
+.input-box{position:relative;display:flex;align-items:flex-end}
+.input-box{position:relative;display:flex;align-items:flex-end}
+.input-box textarea{flex:1;resize:vertical;min-height:100px;max-height:300px;border-radius:12px;background:var(--bg3);border:1px solid var(--border2);padding:10px 170px 10px 14px;color:var(--text);font-size:13px;outline:none;font-family:inherit}
+.input-box textarea:focus{border-color:var(--accent)}
+.input-box textarea::placeholder{color:var(--text5)}
+.input-box .send-btn,.input-box .stop-btn{position:absolute;right:8px;bottom:8px;width:36px;height:36px;border:none;border-radius:10px;color:#fff;font-size:16px;cursor:pointer;display:flex;align-items:center;justify-content:center}
+.input-box .send-btn{background:var(--accent)}
+.input-box .send-btn:hover{background:var(--accent2)}
+.input-box .send-btn:disabled{background:var(--accent3);color:var(--text5);cursor:not-allowed}
+.input-box .stop-btn{background:transparent;border:2px solid var(--danger);color:var(--danger);display:none}
+.input-box .stop-btn:hover{background:var(--danger);color:#fff}
 
 /* Bounce dots animation */
 @keyframes bounce{0%,60%,100%{transform:translateY(0)}30%{transform:translateY(-4px)}}
@@ -110,6 +113,12 @@ body{height:100vh;display:flex;background:var(--bg);color:var(--text);font-famil
 .typing .dot{display:inline-block;animation:bounce 1.4s infinite}
 .typing .dot:nth-child(2){animation-delay:0.15s}
 .typing .dot:nth-child(3){animation-delay:0.3s}
+
+
+/* Permission mode selector */
+.mode-select{position:absolute;right:52px;bottom:12px;background:var(--bg3);border:1px solid var(--border2);border-radius:8px;color:var(--text2);font-size:12px;padding:6px 8px;cursor:pointer;outline:none;height:32px;z-index:10}
+.mode-select:focus{border-color:var(--accent)}
+.mode-select option{background:var(--bg2);color:var(--text)}
 </style>
 </head>
 <body>
@@ -138,9 +147,14 @@ body{height:100vh;display:flex;background:var(--bg);color:var(--text);font-famil
   <div class="messages" id="messages"><div class="messages-inner" id="messagesInner"></div></div>
   <div class="input-area">
     <div class="input-inner">
-      <textarea id="input" rows="1" placeholder="输入消息... (Enter 发送, Shift+Enter 换行)"></textarea>
-      <button class="stop-btn" id="stopBtn" onclick="stopGeneration()">&#9632; 停止</button>
-      <button id="sendBtn" onclick="sendMessage()" disabled>发送</button>
+      <div class="input-box">
+<textarea id="input" rows="1" placeholder="输入消息... (Enter 发送, Shift+Enter 换行)"></textarea>
+        <select class="mode-select" id="modeSelect" title="切换权限模式">
+          <option value="bypassPermissions">无限制</option>
+        </select>
+        <button class="stop-btn" id="stopBtn" onclick="stopGeneration()">G</button>
+        <button class="send-btn" id="sendBtn" onclick="sendMessage()" disabled>&#8593;</button>
+      </div>
     </div>
   </div>
 </div>
@@ -156,6 +170,9 @@ let streamingText = '';
 let streamingThinking = '';
 let currentAssistantEl = null;
 let isGenerating = false;
+let messageHistory = [];
+let historyIndex = -1;
+let tempInput = '';
 
 // --- Theme ---
 function applyTheme(theme) {
@@ -297,8 +314,23 @@ function showStopBtn(show) {
 
 async function stopGeneration() {
   if (!currentSessionId) return;
-  try { await fetch(API + '/api/sessions/' + currentSessionId + '/stop', { method: 'POST' }); } catch {}
-  finalizeStreaming(); addStoppedMsg(); resetStreaming();
+  
+  // Immediately update UI
+  isGenerating = false;
+  if (currentAssistantEl) {
+    currentAssistantEl.remove();
+    currentAssistantEl = null;
+  }
+  streamingText = "";
+  streamingThinking = "";
+  showStopBtn(false);
+  
+  // Send stop request to server
+  try {
+    await fetch(API + "/api/sessions/" + currentSessionId + "/stop", { method: "POST" });
+  } catch (err) {
+    console.error("Failed to stop:", err);
+  }
 }
 
 // --- Message Handling ---
@@ -378,7 +410,9 @@ async function editWorkspace() {
 
 function sendMessage() {
   const input = document.getElementById('input'); const text = input.value.trim();
-  if (!text || !connected) return; input.value = '';
+  if (!text || !connected) return;
+  messageHistory.push(text); historyIndex = -1; tempInput = '';
+  input.value = '';
   addUserMsg(text); streamingText = ''; streamingThinking = ''; currentAssistantEl = null; isGenerating = true; showStopBtn(true);
   ensureAssistantBubble(); currentAssistantEl.querySelector('.bubble').innerHTML = '<span class="typing">思考中<span class="dot">.</span><span class="dot">.</span><span class="dot">.</span></span>';
   ws.send(JSON.stringify({ type: 'message', content: text }));
@@ -387,11 +421,68 @@ function sendMessage() {
 function scrollBottom() { const el = document.getElementById('messages'); el.scrollTop = el.scrollHeight; }
 function escapeHtml(s) { return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
 
-document.getElementById('input').addEventListener('keydown', function(e) { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage(); } });
+document.getElementById('input').addEventListener('keydown', function(e) {
+  const input = e.target;
+  if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage(); }
+  if (e.key === 'ArrowUp') {
+    e.preventDefault();
+    if (messageHistory.length === 0) return;
+    if (historyIndex === -1) tempInput = input.value;
+    if (historyIndex < messageHistory.length - 1) {
+      historyIndex++;
+      input.value = messageHistory[messageHistory.length - 1 - historyIndex];
+    }
+  }
+  if (e.key === 'ArrowDown') {
+    e.preventDefault();
+    if (historyIndex === -1) return;
+    historyIndex--;
+    if (historyIndex === -1) input.value = tempInput;
+    else input.value = messageHistory[messageHistory.length - 1 - historyIndex];
+  }
+});
 document.getElementById('input').addEventListener('input', function() { this.style.height = 'auto'; this.style.height = Math.min(this.scrollHeight, 120) + 'px'; });
 
+
+// --- Permission Mode Selector ---
+let currentMode = 'bypassPermissions';
+
+async function loadModes() {
+  try {
+    const res = await fetch(API + '/api/modes');
+    const modes = await res.json();
+    const select = document.getElementById('modeSelect');
+    select.innerHTML = '';
+    modes.forEach(m => {
+      const opt = document.createElement('option');
+      opt.value = m.id;
+      opt.textContent = m.name;
+      opt.title = m.description;
+      select.appendChild(opt);
+    });
+    select.value = currentMode;
+  } catch {}
+}
+
+document.getElementById('modeSelect').addEventListener('change', async function() {
+  if (!currentSessionId) return;
+  const mode = this.value;
+  currentMode = mode;
+  try {
+    await fetch(API + '/api/sessions/' + currentSessionId + '/mode', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({mode: mode})
+    });
+  } catch (err) {
+    addSystemMsg('切换模式失败: ' + err.message);
+  }
+});
+
 // --- Init ---
+
 (async function init() {
+  await loadModes();
   const list = await loadChatList();
   try { const h = await fetch(API + '/api/health'); const hd = await h.json(); document.getElementById('workspaceDir').textContent = hd.workspace || '-'; } catch {}
   if (list.length > 0) await switchChat(list[0].id); else await newChat();
