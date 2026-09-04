@@ -1,0 +1,432 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Claude Code Web</title>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/highlight.js@11/styles/github-dark.min.css">
+<script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/highlight.js@11/highlight.min.js"></script>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{height:100vh;display:flex;background:#0a0a0f;color:#e0e0e0;font-family:-apple-system,sans-serif;font-size:14px}
+
+.sidebar{width:260px;background:#111118;border-right:1px solid #1e1e2e;display:flex;flex-direction:column}
+.sidebar-header{padding:12px;border-bottom:1px solid #1e1e2e}
+.sidebar-header button{width:100%;padding:8px 12px;background:#2563eb;border:none;border-radius:8px;color:#fff;font-size:13px;cursor:pointer}
+.sidebar-header button:hover{background:#3b82f6}
+.chat-list{flex:1;overflow-y:auto;padding:4px 0}
+.chat-item{padding:8px 12px;cursor:pointer;display:flex;align-items:center;gap:8px;font-size:13px;color:#aaa;border-left:2px solid transparent;transition:background .15s}
+.chat-item:hover{background:#1a1a24}
+.chat-item.active{background:#1e1e2e;color:#e0e0e0;border-left-color:#2563eb}
+.chat-item .chat-title{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.chat-item .chat-delete{color:#888;font-size:14px;cursor:pointer;padding:2px 6px;border-radius:4px;opacity:1}
+.chat-item:hover .chat-delete{opacity:1}
+.chat-item .chat-delete:hover{color:#ef4444}
+.sidebar-info{padding:12px;border-top:1px solid #1e1e2e;font-size:12px;color:#666}
+.sidebar-info .label{color:#555;margin-bottom:4px}
+.sidebar-info .value{color:#888;margin-bottom:12px;word-break:break-all}
+.status-dot{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:4px}
+.status-dot.on{background:#22c55e}
+.status-dot.off{background:#ef4444}
+.sidebar-footer{padding:12px;border-top:1px solid #1e1e2e;font-size:11px;color:#555}
+
+.main{flex:1;display:flex;flex-direction:column;min-width:0}
+.header{height:48px;display:flex;align-items:center;padding:0 16px;border-bottom:1px solid #1e1e2e;background:rgba(17,17,24,0.5)}
+.header span{font-size:13px;color:#888}
+
+.messages{flex:1;overflow-y:auto;padding:24px 16px}
+.messages-inner{max-width:800px;margin:0 auto}
+.msg{margin-bottom:16px}
+.msg-user{display:flex;justify-content:flex-end}
+.msg-user .bubble{max-width:80%;padding:10px 14px;border-radius:16px;background:#2563eb;color:#fff;white-space:pre-wrap;line-height:1.6}
+.msg-assistant{display:flex;justify-content:flex-start}
+.msg-assistant .bubble{max-width:80%;padding:10px 14px;border-radius:16px;background:#1e1e2e;color:#e0e0e0;line-height:1.6}
+.msg-assistant .bubble a{color:#60a5fa}
+.msg-assistant .bubble pre{background:#111118;padding:8px;border-radius:6px;overflow-x:auto;margin:8px 0;font-size:13px}
+.msg-assistant .bubble code{font-family:'Fira Code',monospace;font-size:13px}
+.msg-assistant .bubble p{margin:4px 0}
+.msg-assistant .bubble ul,.msg-assistant .bubble ol{margin:4px 0;padding-left:20px}
+.msg-assistant .bubble blockquote{border-left:3px solid #333;padding-left:10px;color:#888;margin:4px 0}
+
+.thinking-summary{font-size:11px;color:#9ca3af;cursor:pointer;margin-bottom:4px}
+.thinking-content{font-size:12px;color:#9ca3af;max-height:150px;overflow-y:auto;padding:6px;background:#141420;border-radius:6px;margin-bottom:8px}
+
+.msg-tool{display:flex;justify-content:flex-start}
+.msg-tool .bubble{max-width:80%;padding:6px 10px;border-radius:8px;background:#141420;border:1px solid #1e1e2e;font-size:12px;color:#666}
+.msg-tool .tool-name{color:#60a5fa;font-weight:500}
+.msg-tool pre{margin-top:4px;font-size:11px;color:#555;max-height:80px;overflow-y:auto;white-space:pre-wrap}
+
+.msg-system{text-align:center;font-size:12px;color:#ef4444;padding:4px}
+.msg-stopped{text-align:center;font-size:12px;color:#f59e0b;padding:4px}
+
+.input-area{border-top:1px solid #1e1e2e;background:rgba(17,17,24,0.5);padding:16px}
+.input-inner{max-width:800px;margin:0 auto;display:flex;gap:12px}
+.input-inner textarea{flex:1;resize:none;border-radius:12px;background:#1e1e2e;border:1px solid #2a2a3e;padding:10px 14px;color:#fff;font-size:13px;outline:none;font-family:inherit}
+.input-inner textarea:focus{border-color:#2563eb}
+.input-inner textarea::placeholder{color:#555}
+.input-inner button{padding:10px 20px;background:#2563eb;border:none;border-radius:12px;color:#fff;font-size:13px;cursor:pointer;font-weight:500;white-space:nowrap}
+.input-inner button:hover{background:#3b82f6}
+.input-inner button:disabled{background:#1e40af;color:#555;cursor:not-allowed}
+.input-inner .stop-btn{padding:10px 16px;background:#1e1e2e;border:2px solid #dc2626;border-radius:12px;color:#dc2626;font-size:13px;cursor:pointer;font-weight:500;white-space:nowrap;display:none}
+.input-inner .stop-btn:hover{background:#dc2626;color:#fff}
+
+/* Bounce dots animation */
+@keyframes bounce{0%,60%,100%{transform:translateY(0)}30%{transform:translateY(-4px)}}
+.typing{color:#666;font-style:italic}
+.typing .dot{display:inline-block;animation:bounce 1.4s infinite}
+.typing .dot:nth-child(2){animation-delay:0.15s}
+.typing .dot:nth-child(3){animation-delay:0.3s}
+</style>
+</head>
+<body>
+<div class="sidebar">
+  <div class="sidebar-header"><button onclick="newChat()">+ 新对话</button></div>
+  <div class="chat-list" id="chatList"></div>
+  <div class="sidebar-info">
+    <div class="label">状态</div>
+    <div class="value"><span class="status-dot off" id="statusDot"></span><span id="statusText">未连接</span></div>
+    <div class="label">Session</div>
+    <div class="value" id="sessionId">-</div>
+  </div>
+  <div class="sidebar-footer">Claude Code Web Bridge v0.3</div>
+</div>
+<div class="main">
+  <div class="header"><span>Claude Code Web</span></div>
+  <div class="messages" id="messages"><div class="messages-inner" id="messagesInner"></div></div>
+  <div class="input-area">
+    <div class="input-inner">
+      <textarea id="input" rows="1" placeholder="输入消息... (Enter 发送, Shift+Enter 换行)"></textarea>
+      <button class="stop-btn" id="stopBtn" onclick="stopGeneration()">&#9632; 停止</button>
+      <button id="sendBtn" onclick="sendMessage()" disabled>发送</button>
+    </div>
+  </div>
+</div>
+
+<script>
+const API = 'http://' + window.location.hostname + ':8000';
+const WS = 'ws://' + window.location.hostname + ':8000';
+
+let currentSessionId = '';
+let ws = null;
+let connected = false;
+let streamingText = '';
+let streamingThinking = '';
+let currentAssistantEl = null;
+let isGenerating = false;
+
+marked.setOptions({
+  highlight: function(code, lang) {
+    if (lang && hljs.getLanguage(lang)) return hljs.highlight(code, { language: lang }).value;
+    return hljs.highlightAuto(code).value;
+  },
+  breaks: true
+});
+
+// --- Chat List ---
+
+async function loadChatList() {
+  const res = await fetch(API + '/api/sessions');
+  const list = await res.json();
+  renderChatList(list);
+  return list;
+}
+
+function renderChatList(list) {
+  const el = document.getElementById('chatList');
+  el.innerHTML = '';
+  for (const item of list) {
+    const div = document.createElement('div');
+    div.className = 'chat-item' + (item.id === currentSessionId ? ' active' : '');
+    div.innerHTML = '<span class="chat-title">' + escapeHtml(item.title || '新对话') + '</span>' +
+                    '<span class="chat-delete" onclick="event.stopPropagation();deleteChat(\'' + item.id + '\')">\u00d7</span>';
+    div.onclick = () => switchChat(item.id);
+    el.appendChild(div);
+  }
+}
+
+async function deleteChat(sessionId) {
+  await fetch(API + '/api/sessions/' + sessionId, { method: 'DELETE' });
+  if (sessionId === currentSessionId) {
+    if (ws) { ws.close(); ws = null; }
+    currentSessionId = '';
+    document.getElementById('messagesInner').innerHTML = '';
+    setConnected(false);
+  }
+  await loadChatList();
+  if (!currentSessionId) {
+    newChat();
+  }
+}
+
+// --- Session Management ---
+
+async function newChat() {
+  if (ws) { ws.close(); ws = null; }
+  setConnected(false);
+  resetStreaming();
+  document.getElementById('messagesInner').innerHTML = '';
+
+  try {
+    const res = await fetch(API + '/api/sessions', { method: 'POST' });
+    const data = await res.json();
+    currentSessionId = data.session_id;
+    document.getElementById('sessionId').textContent = currentSessionId.slice(0, 8) + '...';
+    connectWS();
+    await loadChatList();
+  } catch (err) {
+    addSystemMsg('创建对话失败: ' + err.message);
+  }
+}
+
+async function switchChat(sessionId) {
+  if (sessionId === currentSessionId) return;
+  if (ws) { ws.close(); ws = null; }
+  setConnected(false);
+  resetStreaming();
+
+  currentSessionId = sessionId;
+  document.getElementById('sessionId').textContent = sessionId.slice(0, 8) + '...';
+
+  document.getElementById('messagesInner').innerHTML = '';
+  try {
+    const res = await fetch(API + '/api/sessions/' + sessionId + '/history');
+    const history = await res.json();
+    for (const msg of history) {
+      if (msg.role === 'user') {
+        addUserMsg(msg.content);
+      } else if (msg.role === 'assistant') {
+        addAssistantMsg(msg.content);
+      }
+    }
+    scrollBottom();
+  } catch (err) {
+    addSystemMsg('加载历史失败: ' + err.message);
+  }
+
+  connectWS();
+  await loadChatList();
+}
+
+// --- WebSocket ---
+
+function connectWS() {
+  ws = new WebSocket(WS + '/ws/' + currentSessionId);
+  ws.onopen = () => setConnected(true);
+  ws.onclose = () => setConnected(false);
+  ws.onerror = () => setConnected(false);
+  ws.onmessage = e => { try { handleMsg(JSON.parse(e.data)); } catch {} };
+}
+
+function setConnected(v) {
+  connected = v;
+  document.getElementById('statusDot').className = 'status-dot ' + (v ? 'on' : 'off');
+  document.getElementById('statusText').textContent = v ? '已连接' : '未连接';
+  document.getElementById('sendBtn').disabled = !v;
+}
+
+// --- Streaming State ---
+
+function resetStreaming() {
+  streamingText = '';
+  streamingThinking = '';
+  currentAssistantEl = null;
+  isGenerating = false;
+  showStopBtn(false);
+}
+
+function showStopBtn(show) {
+  document.getElementById('stopBtn').style.display = show ? 'inline-block' : 'none';
+  document.getElementById('sendBtn').style.display = show ? 'none' : 'inline-block';
+}
+
+async function stopGeneration() {
+  if (!currentSessionId) return;
+  try {
+    await fetch(API + '/api/sessions/' + currentSessionId + '/stop', { method: 'POST' });
+  } catch (err) {}
+  finalizeStreaming();
+  addStoppedMsg();
+  resetStreaming();
+}
+
+// --- Message Handling ---
+
+function handleMsg(msg) {
+  if (msg.type === 'system' && msg.subtype === 'init') {
+    console.log('Claude Code ready:', msg.session_id);
+    return;
+  }
+  if (msg.type === 'assistant') {
+    const content = msg.message?.content;
+    if (!content) return;
+    for (const block of content) {
+      if (block.type === 'thinking') {
+        streamingThinking += (block.thinking || block.text || '');
+        updateStreamingBubble();
+      } else if (block.type === 'text') {
+        streamingText += block.text;
+        updateStreamingBubble();
+      } else if (block.type === 'tool_use') {
+        finalizeStreaming();
+        addToolMsg(block.name, block.input ? JSON.stringify(block.input, null, 2) : '');
+      } else if (block.type === 'tool_result') {
+        addToolMsg('result', block.content || '');
+      }
+    }
+    return;
+  }
+  if (msg.type === 'result') {
+    finalizeStreaming();
+    showStopBtn(false);
+    isGenerating = false;
+    loadChatList();
+    return;
+  }
+  if (msg.type === 'stopped') {
+    finalizeStreaming();
+    addStoppedMsg();
+    resetStreaming();
+    return;
+  }
+  if (msg.type === 'error') {
+    addSystemMsg(msg.content || 'Unknown error');
+    return;
+  }
+}
+
+function ensureAssistantBubble() {
+  if (!currentAssistantEl) {
+    currentAssistantEl = document.createElement('div');
+    currentAssistantEl.className = 'msg msg-assistant';
+    currentAssistantEl.innerHTML = '<div class="bubble"></div>';
+    document.getElementById('messagesInner').appendChild(currentAssistantEl);
+    scrollBottom();
+  }
+}
+
+function updateStreamingBubble() {
+  ensureAssistantBubble();
+  let html = '';
+  if (streamingThinking) {
+    html += '<details open><summary class="thinking-summary">思考中...</summary><div class="thinking-content">' + marked.parse(streamingThinking) + '</div></details>';
+  }
+  if (streamingText) {
+    html += marked.parse(streamingText);
+  }
+  if (!streamingText && !streamingThinking) {
+    html = '<span class="typing">思考中<span class="dot">.</span><span class="dot">.</span><span class="dot">.</span></span>';
+  }
+  currentAssistantEl.querySelector('.bubble').innerHTML = html;
+  scrollBottom();
+}
+
+function finalizeStreaming() {
+  if (!currentAssistantEl || (!streamingText && !streamingThinking)) {
+    currentAssistantEl = null;
+    streamingText = '';
+    streamingThinking = '';
+    return;
+  }
+  let html = '';
+  if (streamingThinking) {
+    html += '<details><summary class="thinking-summary">思考过程</summary><div class="thinking-content">' + marked.parse(streamingThinking) + '</div></details>';
+  }
+  html += marked.parse(streamingText);
+  currentAssistantEl.querySelector('.bubble').innerHTML = html;
+  currentAssistantEl = null;
+  streamingText = '';
+  streamingThinking = '';
+}
+
+function addUserMsg(text) {
+  const el = document.createElement('div');
+  el.className = 'msg msg-user';
+  el.innerHTML = '<div class="bubble">' + escapeHtml(text) + '</div>';
+  document.getElementById('messagesInner').appendChild(el);
+  scrollBottom();
+}
+
+function addAssistantMsg(text) {
+  const el = document.createElement('div');
+  el.className = 'msg msg-assistant';
+  el.innerHTML = '<div class="bubble">' + marked.parse(text) + '</div>';
+  document.getElementById('messagesInner').appendChild(el);
+}
+
+function addToolMsg(name, content) {
+  const el = document.createElement('div');
+  el.className = 'msg msg-tool';
+  let inner = '<div class="bubble"><span class="tool-name">[' + escapeHtml(name) + ']</span>';
+  if (content) {
+    const display = content.length > 500 ? content.slice(0, 500) + '...' : content;
+    inner += '<pre>' + escapeHtml(display) + '</pre>';
+  }
+  inner += '</div>';
+  el.innerHTML = inner;
+  document.getElementById('messagesInner').appendChild(el);
+  scrollBottom();
+}
+
+function addSystemMsg(text) {
+  const el = document.createElement('div');
+  el.className = 'msg-system';
+  el.textContent = text;
+  document.getElementById('messagesInner').appendChild(el);
+  scrollBottom();
+}
+
+function addStoppedMsg() {
+  const el = document.createElement('div');
+  el.className = 'msg-stopped';
+  el.textContent = '已中断';
+  document.getElementById('messagesInner').appendChild(el);
+  scrollBottom();
+}
+
+function sendMessage() {
+  const input = document.getElementById('input');
+  const text = input.value.trim();
+  if (!text || !connected) return;
+  input.value = '';
+  addUserMsg(text);
+  streamingText = '';
+  streamingThinking = '';
+  currentAssistantEl = null;
+  isGenerating = true;
+  showStopBtn(true);
+  ensureAssistantBubble();
+  currentAssistantEl.querySelector('.bubble').innerHTML = '<span class="typing">思考中<span class="dot">.</span><span class="dot">.</span><span class="dot">.</span></span>';
+  ws.send(JSON.stringify({ type: 'message', content: text }));
+}
+
+function scrollBottom() {
+  const el = document.getElementById('messages');
+  el.scrollTop = el.scrollHeight;
+}
+
+function escapeHtml(s) {
+  return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+
+document.getElementById('input').addEventListener('keydown', function(e) {
+  if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage(); }
+});
+
+document.getElementById('input').addEventListener('input', function() {
+  this.style.height = 'auto';
+  this.style.height = Math.min(this.scrollHeight, 120) + 'px';
+});
+
+// --- Init ---
+(async function init() {
+  const list = await loadChatList();
+  if (list.length > 0) {
+    await switchChat(list[0].id);
+  } else {
+    await newChat();
+  }
+})();
+</script>
+</body>
+</html>
