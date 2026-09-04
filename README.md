@@ -42,9 +42,9 @@ ai-chat-app/
 ### 启动
 
 ```bash
-./start.sh    # 启动
-./stop.sh     # 停止
-./restart.sh  # 重启
+./ai-chat-app.sh start    # 启动
+./ai-chat-app.sh stop     # 停止
+./ai-chat-app.sh restart  # 重启
 ```
 
 浏览器打开 http://localhost:8000 即可使用。
