@@ -422,6 +422,120 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str):
         session.websocket = None
 
 
+@app.get("/api/projects")
+def list_projects():
+    """List all projects and their document files under {WORKSPACE_DIR}/project/."""
+    project_root = Path(WORKSPACE_DIR) / "project"
+    if not project_root.exists():
+        return {}
+    result = {}
+    for proj_dir in sorted(project_root.iterdir()):
+        if proj_dir.is_dir() and not proj_dir.name.startswith('.'):
+            files = []
+            for f in sorted(proj_dir.iterdir()):
+                if f.is_file() and f.suffix == '.md':
+                    files.append(f.name)
+            if files:
+                result[proj_dir.name] = files
+    return result
+
+
+@app.get("/api/projects/{project_name}/content/{filename}")
+def get_project_file_content(project_name: str, filename: str):
+    """Read the content of a project document file."""
+    # Security: prevent path traversal
+    if '..' in project_name or '..' in filename or '/' in filename or '\\' in filename:
+        raise HTTPException(400, "Invalid path")
+    project_root = Path(WORKSPACE_DIR) / "project"
+    file_path = project_root / project_name / filename
+    # Ensure resolved path is still under project root
+    try:
+        file_path.resolve().relative_to(project_root.resolve())
+    except ValueError:
+        raise HTTPException(400, "Invalid path")
+    if not file_path.exists() or not file_path.is_file():
+        raise HTTPException(404, "File not found")
+    content = file_path.read_text(encoding="utf-8")
+    return {"filename": filename, "content": content}
+
+
+@app.put("/api/projects/{project_name}/content/{filename}")
+def update_project_file(project_name: str, filename: str, body: dict):
+    """Update (save) a project document file."""
+    if '..' in project_name or '..' in filename or '/' in filename or '\\' in filename:
+        raise HTTPException(400, "Invalid path")
+    project_root = Path(WORKSPACE_DIR) / "project"
+    file_path = project_root / project_name / filename
+    try:
+        file_path.resolve().relative_to(project_root.resolve())
+    except ValueError:
+        raise HTTPException(400, "Invalid path")
+    if not file_path.exists():
+        raise HTTPException(404, "File not found")
+    new_content = body.get("content", "")
+    file_path.write_text(new_content, encoding="utf-8")
+    return {"ok": True, "filename": filename}
+
+
+@app.delete("/api/projects/{project_name}/content/{filename}")
+def delete_project_file(project_name: str, filename: str):
+    """Delete a project document file."""
+    if '..' in project_name or '..' in filename or '/' in filename or '\\' in filename:
+        raise HTTPException(400, "Invalid path")
+    project_root = Path(WORKSPACE_DIR) / "project"
+    file_path = project_root / project_name / filename
+    try:
+        file_path.resolve().relative_to(project_root.resolve())
+    except ValueError:
+        raise HTTPException(400, "Invalid path")
+    if not file_path.exists():
+        raise HTTPException(404, "File not found")
+    file_path.unlink()
+    return {"ok": True}
+
+
+@app.post("/api/projects/{project_name}/content")
+def create_project_file(project_name: str, body: dict):
+    """Create a new project document file."""
+    if '..' in project_name or '/' in project_name or '\\' in project_name:
+        raise HTTPException(400, "Invalid project name")
+    filename = body.get("filename", "").strip()
+    content_text = body.get("content", "")
+    if not filename:
+        raise HTTPException(400, "filename is required")
+    if '..' in filename or '/' in filename or '\\' in filename:
+        raise HTTPException(400, "Invalid filename")
+    if not filename.endswith('.md'):
+        filename += '.md'
+    project_root = Path(WORKSPACE_DIR) / "project"
+    proj_dir = project_root / project_name
+    proj_dir.mkdir(parents=True, exist_ok=True)
+    file_path = proj_dir / filename
+    if file_path.exists():
+        raise HTTPException(409, "File already exists")
+    file_path.write_text(content_text, encoding="utf-8")
+    return {"ok": True, "filename": filename}
+
+
+@app.put("/api/sessions/{session_id}/title")
+def rename_session(session_id: str, body: dict):
+    """Rename a session title."""
+    new_title = body.get("title", "").strip()
+    if not new_title:
+        raise HTTPException(400, "title is required")
+    # Check session exists in index
+    index = SessionStore.load_index()
+    found = False
+    for entry in index:
+        if entry["id"] == session_id:
+            found = True
+            break
+    if not found:
+        raise HTTPException(404, "Session not found")
+    SessionStore.update_title(session_id, new_title)
+    return {"ok": True, "title": new_title}
+
+
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("app.main:app", host="0.0.0.0", port=8000, reload=False)

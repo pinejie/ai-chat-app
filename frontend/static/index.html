@@ -41,6 +41,67 @@ body{height:100vh;display:flex;background:var(--bg);color:var(--text);font-famil
 
 .sidebar{width:260px;background:var(--bg2);border-right:1px solid var(--border);display:flex;flex-direction:column}
 .sidebar-header{padding:12px;border-bottom:1px solid var(--border)}
+.sidebar-tabs{display:flex;gap:0;margin-bottom:8px;background:var(--bg3);border-radius:8px;padding:3px;position:relative}
+.sidebar-tab{flex:1;padding:8px 0;border:none;background:transparent;color:var(--text3);font-size:12px;cursor:pointer;transition:all .2s;border-radius:6px;font-weight:500}
+.sidebar-tab:hover{color:var(--text)}
+.sidebar-tab.active{background:var(--bg2);color:var(--text);box-shadow:0 1px 3px rgba(0,0,0,.15)}
+.project-list{flex:1;overflow-y:auto;padding:4px 0;display:none}
+.proj-group{margin-bottom:2px}
+.proj-name{padding:8px 12px;cursor:pointer;display:flex;align-items:center;gap:6px;font-size:13px;color:var(--text2);font-weight:500;transition:background .15s}
+.proj-name:hover{background:var(--bg3)}
+.proj-name .arrow{font-size:10px;transition:transform .2s;color:var(--text4)}
+.proj-name.open .arrow{transform:rotate(90deg)}
+.proj-files{display:none;padding:0 0 4px 0}
+.proj-files.open{display:block}
+.proj-file{padding:6px 12px 6px 28px;cursor:pointer;font-size:12px;color:var(--text3);transition:background .15s;display:flex;align-items:center;gap:6px}
+.proj-file:hover{background:var(--bg3);color:var(--text)}
+.proj-file.active{background:var(--bg3);color:var(--text);border-left:2px solid var(--accent)}
+.proj-file .file-icon{color:var(--text5);font-size:11px}
+.doc-view{flex:1;display:none;flex-direction:column;min-width:0}
+.doc-view.active{display:flex}
+.doc-header{height:48px;display:flex;align-items:center;padding:0 16px;border-bottom:1px solid var(--border);background:var(--bg2);gap:12px}
+.doc-back{padding:4px 12px;border:1px solid var(--border2);border-radius:6px;background:transparent;color:var(--text2);font-size:12px;cursor:pointer}
+.doc-back:hover{background:var(--bg3)}
+.doc-title{font-size:13px;color:var(--text3)}
+.doc-content{flex:1;overflow-y:auto;padding:24px 16px}
+.doc-content-inner{max-width:800px;margin:0 auto}
+.doc-content-inner .bubble{padding:10px 14px;border-radius:16px;background:var(--bg3);color:var(--text);line-height:1.6}
+.doc-content-inner .bubble a{color:var(--link)}
+.doc-content-inner .bubble pre{background:var(--code-bg);padding:8px;border-radius:6px;overflow-x:auto;margin:8px 0;font-size:13px}
+.doc-content-inner .bubble code{font-family:'Fira Code',monospace;font-size:13px}
+.doc-content-inner .bubble p{margin:4px 0}
+.doc-content-inner .bubble ul,.doc-content-inner .bubble ol{margin:4px 0;padding-left:20px}
+.doc-content-inner .bubble blockquote{border-left:3px solid var(--border);padding-left:10px;color:var(--text4);margin:4px 0}
+.doc-content-inner .bubble table{border-collapse:collapse;margin:8px 0;width:100%}
+.doc-content-inner .bubble th,.doc-content-inner .bubble td{border:1px solid var(--border2);padding:6px 10px;font-size:13px}
+.doc-content-inner .bubble th{background:var(--bg4);font-weight:500}
+.doc-actions{display:flex;gap:6px;margin-left:auto}
+.doc-btn{padding:4px 10px;border:1px solid var(--border2);border-radius:5px;background:transparent;color:var(--text3);font-size:11px;cursor:pointer;transition:all .15s}
+.doc-btn:hover{background:var(--bg3);color:var(--text)}
+.doc-btn.danger{border-color:var(--danger);color:var(--danger)}
+.doc-btn.danger:hover{background:var(--danger);color:#fff}
+.doc-edit-area{flex:1;display:flex;flex-direction:column;padding:16px}
+.doc-edit-area textarea{flex:1;resize:none;background:var(--bg3);border:1px solid var(--border2);border-radius:8px;padding:12px;color:var(--text);font-family:'Fira Code',monospace;font-size:13px;line-height:1.6;outline:none}
+.doc-edit-area textarea:focus{border-color:var(--accent)}
+.doc-edit-actions{display:flex;gap:8px;margin-top:12px;justify-content:flex-end}
+.doc-edit-actions button{padding:6px 16px;border-radius:6px;font-size:12px;cursor:pointer;border:none}
+.doc-edit-actions .save-btn{background:var(--accent);color:#fff}
+.doc-edit-actions .save-btn:hover{background:var(--accent2)}
+.doc-edit-actions .cancel-btn{background:transparent;border:1px solid var(--border2);color:var(--text3)}
+.doc-edit-actions .cancel-btn:hover{background:var(--bg3)}
+.modal-overlay{position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,.5);display:none;align-items:center;justify-content:center;z-index:1000}
+.modal-overlay.show{display:flex}
+.modal-box{background:var(--bg2);border:1px solid var(--border);border-radius:12px;padding:20px;min-width:320px;box-shadow:0 8px 32px rgba(0,0,0,.3)}
+.modal-title{font-size:14px;color:var(--text);margin-bottom:12px;font-weight:500}
+.modal-input{width:100%;padding:8px 12px;background:var(--bg3);border:1px solid var(--border2);border-radius:6px;color:var(--text);font-size:13px;outline:none;box-sizing:border-box}
+.modal-input:focus{border-color:var(--accent)}
+.modal-actions{display:flex;gap:8px;margin-top:16px;justify-content:flex-end}
+.modal-actions button{padding:6px 16px;border-radius:6px;font-size:12px;cursor:pointer;border:none}
+.modal-actions .confirm-btn{background:var(--accent);color:#fff}
+.modal-actions .confirm-btn:hover{background:var(--accent2)}
+.modal-actions .cancel-btn{background:transparent;border:1px solid var(--border2);color:var(--text3)}
+.modal-actions .cancel-btn:hover{background:var(--bg3)}
+.chat-title-edit{background:var(--bg3);border:1px solid var(--accent);border-radius:4px;padding:2px 6px;color:var(--text);font-size:13px;outline:none;font-family:inherit;width:100%;box-sizing:border-box}
 .sidebar-header button{width:100%;padding:8px 12px;background:var(--accent);border:none;border-radius:8px;color:#fff;font-size:13px;cursor:pointer}
 .sidebar-header button:hover{background:var(--accent2)}
 .chat-list{flex:1;overflow-y:auto;padding:4px 0}
@@ -123,8 +184,15 @@ body{height:100vh;display:flex;background:var(--bg);color:var(--text);font-famil
 </head>
 <body>
 <div class="sidebar">
-  <div class="sidebar-header"><button onclick="newChat()">+ 新对话</button></div>
+  <div class="sidebar-header">
+    <div class="sidebar-tabs">
+      <button class="sidebar-tab active" id="tabChat" onclick="switchSidebarTab('chat')">对话</button>
+      <button class="sidebar-tab" id="tabProjects" onclick="switchSidebarTab('projects')">项目文档</button>
+    </div>
+    <button id="newChatBtn" onclick="newChat()">+ 新对话</button>
+  </div>
   <div class="chat-list" id="chatList"></div>
+  <div class="project-list" id="projectList"></div>
   <div class="sidebar-info">
     <div class="label">状态</div>
     <div class="value"><span class="status-dot off" id="statusDot"></span><span id="statusText">未连接</span></div>
@@ -142,7 +210,7 @@ body{height:100vh;display:flex;background:var(--bg);color:var(--text);font-famil
     </div>
   </div>
 </div>
-<div class="main">
+<div class="main" id="chatMain">
   <div class="header"><span>ZD Code</span></div>
   <div class="messages" id="messages"><div class="messages-inner" id="messagesInner"></div></div>
   <div class="input-area">
@@ -155,6 +223,35 @@ body{height:100vh;display:flex;background:var(--bg);color:var(--text);font-famil
         <button class="stop-btn" id="stopBtn" onclick="stopGeneration()">G</button>
         <button class="send-btn" id="sendBtn" onclick="sendMessage()" disabled>&#8593;</button>
       </div>
+    </div>
+  </div>
+</div>
+<div class="doc-view" id="docView">
+  <div class="doc-header">
+    <button class="doc-back" onclick="closeDocView()">&#8592; 返回</button>
+    <span class="doc-title" id="docTitle"></span>
+    <div class="doc-actions">
+      <button class="doc-btn" onclick="editDoc()">编辑</button>
+      <button class="doc-btn" onclick="showNewDocModal()">新建</button>
+      <button class="doc-btn danger" onclick="deleteDoc()">删除</button>
+    </div>
+  </div>
+  <div class="doc-content" id="docContentArea"><div class="doc-content-inner" id="docContentInner"></div></div>
+  <div class="doc-edit-area" id="docEditArea" style="display:none">
+    <textarea id="docEditText"></textarea>
+    <div class="doc-edit-actions">
+      <button class="cancel-btn" onclick="cancelEdit()">取消</button>
+      <button class="save-btn" onclick="saveDoc()">保存</button>
+    </div>
+  </div>
+</div>
+<div class="modal-overlay" id="modalOverlay">
+  <div class="modal-box">
+    <div class="modal-title" id="modalTitle">新建文档</div>
+    <input type="text" class="modal-input" id="modalInput" placeholder="输入文件名（如 05-新文档.md）">
+    <div class="modal-actions">
+      <button class="cancel-btn" onclick="closeModal()">取消</button>
+      <button class="confirm-btn" id="modalConfirmBtn" onclick="modalConfirm()">确认</button>
     </div>
   </div>
 </div>
@@ -222,8 +319,17 @@ function renderChatList(list) {
   for (const item of list) {
     const div = document.createElement('div');
     div.className = 'chat-item' + (item.id === currentSessionId ? ' active' : '');
-    div.innerHTML = '<span class="chat-title">' + escapeHtml(item.title || '新对话') + '</span>' +
-                    '<span class="chat-delete" onclick="event.stopPropagation();deleteChat(\'' + item.id + '\')">\u00d7</span>';
+    const titleSpan = document.createElement('span');
+    titleSpan.className = 'chat-title';
+    titleSpan.textContent = item.title || '新对话';
+    titleSpan.ondblclick = function(e) { e.stopPropagation(); enableRename(this, item.id); };
+    const delSpan = document.createElement('span');
+    delSpan.className = 'chat-delete';
+    delSpan.innerHTML = '\u00d7';
+    delSpan.onclick = function(e) { e.stopPropagation(); deleteChat(item.id); };
+    div.innerHTML = '';
+    div.appendChild(titleSpan);
+    div.appendChild(delSpan);
     div.onclick = () => switchChat(item.id);
     el.appendChild(div);
   }
@@ -382,7 +488,7 @@ function finalizeStreaming() {
   currentAssistantEl = null; streamingText = ''; streamingThinking = '';
 }
 
-function addUserMsg(text) { const el = document.createElement('div'); el.className = 'msg msg-user'; el.innerHTML = '<div class="bubble">' + escapeHtml(text) + '</div>'; document.getElementById('messagesInner').appendChild(el); scrollBottom(); }
+function addUserMsg(text) { const el = document.createElement('div'); el.className = 'msg msg-user'; el.innerHTML = '<div class="bubble">' + escapeHtml(text) + '</div>'; document.getElementById('messagesInner').appendChild(el); scrollBottom(true); }
 function addAssistantMsg(text) { const el = document.createElement('div'); el.className = 'msg msg-assistant'; el.innerHTML = '<div class="bubble">' + marked.parse(text) + '</div>'; document.getElementById('messagesInner').appendChild(el); }
 function addToolMsg(name, content) { const el = document.createElement('div'); el.className = 'msg msg-tool'; let inner = '<div class="bubble"><span class="tool-name">[' + escapeHtml(name) + ']</span>'; if (content) { const d = content.length > 500 ? content.slice(0, 500) + '...' : content; inner += '<pre>' + escapeHtml(d) + '</pre>'; } inner += '</div>'; el.innerHTML = inner; document.getElementById('messagesInner').appendChild(el); scrollBottom(); }
 function addSystemMsg(text) { const el = document.createElement('div'); el.className = 'msg-system'; el.textContent = text; document.getElementById('messagesInner').appendChild(el); scrollBottom(); }
@@ -418,7 +524,13 @@ function sendMessage() {
   ws.send(JSON.stringify({ type: 'message', content: text }));
 }
 
-function scrollBottom() { const el = document.getElementById('messages'); el.scrollTop = el.scrollHeight; }
+function scrollBottom(force) {
+  const el = document.getElementById('messages');
+  if (force === true) { el.scrollTop = el.scrollHeight; return; }
+  // Only auto-scroll if user is near bottom (within 80px)
+  const isNearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
+  if (isNearBottom) el.scrollTop = el.scrollHeight;
+}
 function escapeHtml(s) { return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
 
 document.getElementById('input').addEventListener('keydown', function(e) {
@@ -478,6 +590,246 @@ document.getElementById('modeSelect').addEventListener('change', async function(
     addSystemMsg('切换模式失败: ' + err.message);
   }
 });
+
+// --- Sidebar Tab Switching ---
+let currentSidebarTab = 'chat';
+
+function switchSidebarTab(tab) {
+  currentSidebarTab = tab;
+  document.getElementById('tabChat').classList.toggle('active', tab === 'chat');
+  document.getElementById('tabProjects').classList.toggle('active', tab === 'projects');
+  document.getElementById('chatList').style.display = tab === 'chat' ? '' : 'none';
+  document.getElementById('projectList').style.display = tab === 'projects' ? 'block' : 'none';
+  document.getElementById('newChatBtn').style.display = tab === 'chat' ? '' : 'none';
+  if (tab === 'projects') loadProjects();
+}
+
+// --- Project Documents ---
+let projectsData = {};
+let currentDocFile = '';
+
+async function loadProjects() {
+  try {
+    const res = await fetch(API + '/api/projects');
+    projectsData = await res.json();
+    renderProjectList();
+  } catch (err) {
+    console.error('Failed to load projects:', err);
+  }
+}
+
+function renderProjectList() {
+  const el = document.getElementById('projectList');
+  el.innerHTML = '';
+  const names = Object.keys(projectsData);
+  if (names.length === 0) {
+    el.innerHTML = '<div style="padding:12px;font-size:12px;color:var(--text4)">暂无项目文档</div>';
+    return;
+  }
+  for (const name of names) {
+    const files = projectsData[name];
+    const group = document.createElement('div');
+    group.className = 'proj-group';
+    const nameEl = document.createElement('div');
+    nameEl.className = 'proj-name';
+    nameEl.innerHTML = '<span class="arrow">&#9654;</span>' + escapeHtml(name);
+    nameEl.onclick = function() {
+      this.classList.toggle('open');
+      this.nextElementSibling.classList.toggle('open');
+    };
+    const filesEl = document.createElement('div');
+    filesEl.className = 'proj-files';
+    for (const f of files) {
+      const fileEl = document.createElement('div');
+      fileEl.className = 'proj-file';
+      fileEl.setAttribute('data-file', f);
+      fileEl.setAttribute('data-project', name);
+      fileEl.innerHTML = '<span class="file-icon">&#128196;</span>' + escapeHtml(f);
+      fileEl.onclick = function(e) {
+        e.stopPropagation();
+        openDocView(name, f);
+        // Highlight active
+        el.querySelectorAll('.proj-file').forEach(function(x) { x.classList.remove('active'); });
+        this.classList.add('active');
+      };
+      filesEl.appendChild(fileEl);
+    }
+    group.appendChild(nameEl);
+    group.appendChild(filesEl);
+    el.appendChild(group);
+  }
+}
+
+async function openDocView(projectName, filename) {
+  currentDocProject = projectName;
+  currentDocFile = filename;
+  isEditing = false;
+  document.getElementById('docEditArea').style.display = 'none';
+  document.getElementById('docContentArea').style.display = '';
+  document.getElementById('docTitle').textContent = projectName + ' / ' + filename;
+  document.getElementById('docContentInner').innerHTML = '<span style="color:var(--text4)">加载中...</span>';
+  // Show doc view, hide chat
+  document.getElementById('chatMain').style.display = 'none';
+  document.getElementById('docView').classList.add('active');
+  try {
+    const res = await fetch(API + '/api/projects/' + encodeURIComponent(projectName) + '/content/' + encodeURIComponent(filename));
+    const data = await res.json();
+    document.getElementById('docContentInner').innerHTML = '<div class="bubble">' + marked.parse(data.content) + '</div>';
+  } catch (err) {
+    document.getElementById('docContentInner').innerHTML = '<span style="color:var(--danger2)">加载失败: ' + escapeHtml(err.message) + '</span>';
+  }
+}
+
+function closeDocView() {
+  document.getElementById('docView').classList.remove('active');
+  document.getElementById('chatMain').style.display = '';
+  // Clear active file highlight
+  document.querySelectorAll('.proj-file').forEach(function(x) { x.classList.remove('active'); });
+  currentDocFile = '';
+}
+
+
+// --- Document Edit/Delete/New ---
+let currentDocProject = '';
+let isEditing = false;
+let modalCallback = null;
+
+function editDoc() {
+  if (!currentDocProject || !currentDocFile || isEditing) return;
+  isEditing = true;
+  // Fetch raw content
+  fetch(API + '/api/projects/' + encodeURIComponent(currentDocProject) + '/content/' + encodeURIComponent(currentDocFile))
+    .then(r => r.json())
+    .then(data => {
+      document.getElementById('docContentArea').style.display = 'none';
+      document.getElementById('docEditArea').style.display = 'flex';
+      document.getElementById('docEditText').value = data.content;
+      document.getElementById('docEditText').focus();
+    })
+    .catch(err => { alert('加载失败: ' + err.message); isEditing = false; });
+}
+
+function cancelEdit() {
+  isEditing = false;
+  document.getElementById('docEditArea').style.display = 'none';
+  document.getElementById('docContentArea').style.display = '';
+}
+
+function saveDoc() {
+  if (!currentDocProject || !currentDocFile) return;
+  const newContent = document.getElementById('docEditText').value;
+  fetch(API + '/api/projects/' + encodeURIComponent(currentDocProject) + '/content/' + encodeURIComponent(currentDocFile), {
+    method: 'PUT',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({content: newContent})
+  })
+  .then(r => { if(!r.ok) throw new Error('Save failed'); return r.json(); })
+  .then(() => {
+    isEditing = false;
+    // Refresh view
+    openDocView(currentDocProject, currentDocFile);
+  })
+  .catch(err => alert('保存失败: ' + err.message));
+}
+
+function deleteDoc() {
+  if (!currentDocProject || !currentDocFile) return;
+  if (!confirm('确定删除 ' + currentDocFile + '？此操作不可恢复。')) return;
+  fetch(API + '/api/projects/' + encodeURIComponent(currentDocProject) + '/content/' + encodeURIComponent(currentDocFile), {
+    method: 'DELETE'
+  })
+  .then(r => { if(!r.ok) throw new Error('Delete failed'); return r.json(); })
+  .then(() => {
+    closeDocView();
+    loadProjects();
+  })
+  .catch(err => alert('删除失败: ' + err.message));
+}
+
+function showNewDocModal() {
+  if (!currentDocProject) {
+    // If not viewing a doc, prompt for project name too - but for now just alert
+    alert('请先选择一个项目');
+    return;
+  }
+  document.getElementById('modalTitle').textContent = '新建文档 - ' + currentDocProject;
+  document.getElementById('modalInput').value = '';
+  document.getElementById('modalInput').placeholder = '输入文件名（如 05-新文档.md）';
+  modalCallback = function(filename) {
+    // Create empty doc
+    fetch(API + '/api/projects/' + encodeURIComponent(currentDocProject) + '/content', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({filename: filename, content: '# ' + filename.replace('.md','') + '\n'})
+    })
+    .then(r => { if(!r.ok) throw new Error('Create failed'); return r.json(); })
+    .then(() => {
+      loadProjects();
+      // Open the new doc for editing
+      openDocView(currentDocProject, filename.endsWith('.md') ? filename : filename + '.md');
+    })
+    .catch(err => alert('创建失败: ' + err.message));
+  };
+  document.getElementById('modalOverlay').classList.add('show');
+  setTimeout(() => document.getElementById('modalInput').focus(), 100);
+}
+
+function closeModal() {
+  document.getElementById('modalOverlay').classList.remove('show');
+  modalCallback = null;
+}
+
+function modalConfirm() {
+  const val = document.getElementById('modalInput').value.trim();
+  if (!val) return;
+  if (modalCallback) modalCallback(val);
+  closeModal();
+}
+
+document.getElementById('modalInput').addEventListener('keydown', function(e) {
+  if (e.key === 'Enter') { e.preventDefault(); modalConfirm(); }
+  if (e.key === 'Escape') { closeModal(); }
+});
+
+// Close modal on overlay click
+document.getElementById('modalOverlay').addEventListener('click', function(e) {
+  if (e.target === this) closeModal();
+});
+
+// --- Chat Rename ---
+function enableRename(element, sessionId) {
+  if (element.querySelector('input')) return;
+  const current = element.textContent;
+  const input = document.createElement('input');
+  input.type = 'text';
+  input.className = 'chat-title-edit';
+  input.value = current;
+  element.textContent = '';
+  element.appendChild(input);
+  input.focus();
+  input.select();
+  
+  function save() {
+    const val = input.value.trim();
+    if (val && val !== current) {
+      fetch(API + '/api/sessions/' + sessionId + '/title', {
+        method: 'PUT',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({title: val})
+      })
+      .then(r => { if(!r.ok) throw new Error('Rename failed'); return r.json(); })
+      .then(() => { loadChatList(); })
+      .catch(err => { alert('重命名失败: ' + err.message); element.textContent = current; });
+    } else {
+      element.textContent = current;
+    }
+  }
+  input.addEventListener('keydown', function(e) {
+    if (e.key === 'Enter') { e.preventDefault(); save(); }
+    if (e.key === 'Escape') { element.textContent = current; }
+  });
+  input.addEventListener('blur', save);
+}
 
 // --- Init ---
 
