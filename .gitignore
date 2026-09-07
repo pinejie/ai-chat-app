@@ -1,6 +1,6 @@
 __pycache__/
 *.pyc
-data/sessions/
+data/
 .env
 backend/.pid
 backend/uvicorn.log

@@ -156,17 +156,27 @@ body{height:100vh;display:flex;background:var(--bg);color:var(--text);font-famil
 
 .input-area{border-top:1px solid var(--border);background:var(--bg2);padding:16px}
 .input-inner{max-width:800px;margin:0 auto}
-.input-box{position:relative;display:flex;align-items:flex-end}
-.input-box{position:relative;display:flex;align-items:flex-end}
-.input-box textarea{flex:1;resize:vertical;min-height:100px;max-height:300px;border-radius:12px;background:var(--bg3);border:1px solid var(--border2);padding:10px 170px 10px 14px;color:var(--text);font-size:13px;outline:none;font-family:inherit}
-.input-box textarea:focus{border-color:var(--accent)}
+.input-box{display:flex;flex-direction:column;border-radius:12px;background:var(--bg3);border:1px solid var(--border2);overflow:hidden}
+.input-box textarea{flex:1;resize:vertical;min-height:100px;max-height:300px;border:none;background:transparent;padding:10px 14px;color:var(--text);font-size:13px;outline:none;font-family:inherit;width:100%;box-sizing:border-box}
+.input-box:focus-within{border-color:var(--accent)}
 .input-box textarea::placeholder{color:var(--text5)}
-.input-box .send-btn,.input-box .stop-btn{position:absolute;right:8px;bottom:8px;width:36px;height:36px;border:none;border-radius:10px;color:#fff;font-size:16px;cursor:pointer;display:flex;align-items:center;justify-content:center}
+.input-toolbar{display:flex;align-items:center;gap:6px;padding:6px 10px;}
+.input-toolbar .toolbar-spacer{flex:1}
+.input-box .send-btn,.input-box .stop-btn{width:36px;height:36px;border:none;border-radius:10px;color:#fff;font-size:16px;cursor:pointer;display:flex;align-items:center;justify-content:center}
 .input-box .send-btn{background:var(--accent)}
 .input-box .send-btn:hover{background:var(--accent2)}
 .input-box .send-btn:disabled{background:var(--accent3);color:var(--text5);cursor:not-allowed}
 .input-box .stop-btn{background:transparent;border:2px solid var(--danger);color:var(--danger);display:none}
 .input-box .stop-btn:hover{background:var(--danger);color:#fff}
+.input-box .upload-btn{width:32px;height:32px;border:none;border-radius:8px;background:transparent;color:var(--text3);font-size:18px;cursor:pointer;display:flex;align-items:center;justify-content:center;transition:all 0.2s}
+.input-box .upload-btn:hover{background:var(--bg3-hover);color:var(--accent)}
+.file-preview{margin:0;padding:8px 10px;display:flex;flex-wrap:wrap;gap:8px;}
+.file-preview-item{display:flex;align-items:center;gap:6px;background:var(--bg3);border:1px solid var(--border2);border-radius:8px;padding:6px 10px;font-size:12px;color:var(--text2);max-width:200px}
+.file-preview-item img{width:32px;height:32px;object-fit:cover;border-radius:4px}
+.file-preview-item .file-icon{width:32px;height:32px;display:flex;align-items:center;justify-content:center;background:var(--bg4);border-radius:4px;font-size:16px}
+.file-preview-item .file-name{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.file-preview-item .file-remove{width:20px;height:20px;border:none;border-radius:50%;background:var(--bg4);color:var(--text4);cursor:pointer;display:flex;align-items:center;justify-content:center;font-size:14px;transition:all 0.2s}
+.file-preview-item .file-remove:hover{background:var(--danger);color:#fff}
 
 /* Bounce dots animation */
 @keyframes bounce{0%,60%,100%{transform:translateY(0)}30%{transform:translateY(-4px)}}
@@ -177,7 +187,7 @@ body{height:100vh;display:flex;background:var(--bg);color:var(--text);font-famil
 
 
 /* Permission mode selector */
-.mode-select{position:absolute;right:52px;bottom:12px;background:var(--bg3);border:1px solid var(--border2);border-radius:8px;color:var(--text2);font-size:12px;padding:6px 8px;cursor:pointer;outline:none;height:32px;z-index:10}
+.mode-select{background:var(--bg3);border:1px solid var(--border2);border-radius:8px;color:var(--text2);font-size:12px;padding:6px 8px;cursor:pointer;outline:none;height:32px}
 .mode-select:focus{border-color:var(--accent)}
 .mode-select option{background:var(--bg2);color:var(--text)}
 </style>
@@ -217,11 +227,17 @@ body{height:100vh;display:flex;background:var(--bg);color:var(--text);font-famil
     <div class="input-inner">
       <div class="input-box">
 <textarea id="input" rows="1" placeholder="输入消息... (Enter 发送, Shift+Enter 换行)"></textarea>
-        <select class="mode-select" id="modeSelect" title="切换权限模式">
-          <option value="bypassPermissions">无限制</option>
-        </select>
-        <button class="stop-btn" id="stopBtn" onclick="stopGeneration()">G</button>
-        <button class="send-btn" id="sendBtn" onclick="sendMessage()" disabled>&#8593;</button>
+        <div class="input-toolbar">
+          <button class="upload-btn" id="uploadBtn" onclick="document.getElementById('fileInput').click()" title="上传文件">&#128206;</button>
+          <input type="file" id="fileInput" multiple style="display:none" onchange="handleFileSelect(event)">
+          <div class="toolbar-spacer"></div>
+          <select class="mode-select" id="modeSelect" title="切换权限模式">
+            <option value="bypassPermissions">无限制</option>
+          </select>
+          <button class="stop-btn" id="stopBtn" onclick="stopGeneration()">G</button>
+          <button class="send-btn" id="sendBtn" onclick="sendMessage()" disabled>&#8593;</button>
+        </div>
+        <div class="file-preview" id="filePreview" style="display:none"></div>
       </div>
     </div>
   </div>
@@ -261,15 +277,18 @@ const API = 'http://' + window.location.hostname + ':8000';
 const WS = 'ws://' + window.location.hostname + ':8000';
 
 let currentSessionId = '';
-let ws = null;
-let connected = false;
-let streamingText = '';
-let streamingThinking = '';
-let currentAssistantEl = null;
-let isGenerating = false;
+let wsMap = new Map();
+let sessionConnected = new Map();
+let sessionStreamingText = new Map();
+let sessionStreamingThinking = new Map();
+let sessionAssistantEl = new Map();
+let sessionIsGenerating = new Map();
+let sessionMsgs = new Map();
 let messageHistory = [];
 let historyIndex = -1;
 let tempInput = '';
+// 按会话隔离输入状态
+const sessionInputState = new Map(); // sessionId -> { history: [], index: -1, tempInput: '', value: '' }
 
 // --- Theme ---
 function applyTheme(theme) {
@@ -337,11 +356,13 @@ function renderChatList(list) {
 
 async function deleteChat(sessionId) {
   await fetch(API + '/api/sessions/' + sessionId, { method: 'DELETE' });
+  if (wsMap.has(sessionId)) { wsMap.get(sessionId).close(); wsMap.delete(sessionId); }
+  sessionConnected.delete(sessionId);
+  sessionMsgs.delete(sessionId);
   if (sessionId === currentSessionId) {
-    if (ws) { ws.close(); ws = null; }
     currentSessionId = '';
     document.getElementById('messagesInner').innerHTML = '';
-    setConnected(false);
+    updateConnectedUI();
   }
   await loadChatList();
   if (!currentSessionId) { newChat(); }
@@ -350,9 +371,12 @@ async function deleteChat(sessionId) {
 // --- Session Management ---
 
 async function newChat() {
-  if (ws) { ws.close(); ws = null; }
-  setConnected(false);
-  resetStreaming();
+  if (currentSessionId && wsMap.has(currentSessionId)) {
+    wsMap.get(currentSessionId).close();
+    wsMap.delete(currentSessionId);
+  }
+  sessionConnected.set(currentSessionId, false);
+  updateConnectedUI();
   document.getElementById('messagesInner').innerHTML = '';
   try {
     const res = await fetch(API + '/api/sessions', { method: 'POST' });
@@ -368,9 +392,21 @@ async function newChat() {
 
 async function switchChat(sessionId) {
   if (sessionId === currentSessionId) return;
-  if (ws) { ws.close(); ws = null; }
-  setConnected(false);
-  resetStreaming();
+  // Save current session streaming state and input state
+  if (currentSessionId) {
+    sessionStreamingText.set(currentSessionId, streamingText);
+    sessionStreamingThinking.set(currentSessionId, streamingThinking);
+    sessionIsGenerating.set(currentSessionId, isGenerating);
+    sessionAssistantEl.set(currentSessionId, null);
+    // 保存输入状态
+    sessionInputState.set(currentSessionId, {
+      history: [...messageHistory],
+      index: historyIndex,
+      tempInput: tempInput,
+      value: document.getElementById('input').value
+    });
+  }
+  // DO NOT close old WebSocket - keep it alive
   currentSessionId = sessionId;
   document.getElementById('sessionId').textContent = sessionId.slice(0, 8) + '...';
   document.getElementById('messagesInner').innerHTML = '';
@@ -385,22 +421,64 @@ async function switchChat(sessionId) {
   } catch (err) {
     addSystemMsg('加载历史失败: ' + err.message);
   }
-  connectWS();
+  // Restore streaming state for this session
+  streamingText = sessionStreamingText.get(sessionId) || '';
+  streamingThinking = sessionStreamingThinking.get(sessionId) || '';
+  isGenerating = sessionIsGenerating.get(sessionId) || false;
+  currentAssistantEl = null;
+  if (isGenerating && (streamingText || streamingThinking)) {
+    ensureAssistantBubble();
+    updateStreamingBubble();
+    showStopBtn(true);
+  } else {
+    showStopBtn(false);
+  }
+  // 恢复输入状态
+  const savedInput = sessionInputState.get(sessionId);
+  if (savedInput) {
+    messageHistory = savedInput.history;
+    historyIndex = savedInput.index;
+    tempInput = savedInput.tempInput;
+    document.getElementById('input').value = savedInput.value;
+  } else {
+    messageHistory = [];
+    historyIndex = -1;
+    tempInput = '';
+    document.getElementById('input').value = '';
+  }
+  if (!wsMap.has(sessionId)) { connectWS(); }
+  updateConnectedUI();
   await loadChatList();
 }
+
 
 // --- WebSocket ---
 
 function connectWS() {
-  ws = new WebSocket(WS + '/ws/' + currentSessionId);
-  ws.onopen = () => setConnected(true);
-  ws.onclose = () => setConnected(false);
-  ws.onerror = () => setConnected(false);
-  ws.onmessage = e => { try { handleMsg(JSON.parse(e.data)); } catch {} };
+  if (wsMap.has(currentSessionId)) { wsMap.get(currentSessionId).close(); }
+  const socket = new WebSocket(WS + '/ws/' + currentSessionId);
+  wsMap.set(currentSessionId, socket);
+  const sid = currentSessionId;
+  if (!sessionMsgs.has(sid)) sessionMsgs.set(sid, []);
+  socket.onopen = () => {
+    sessionConnected.set(sid, true);
+    if (sid === currentSessionId) updateConnectedUI();
+  };
+  socket.onclose = () => {
+    sessionConnected.set(sid, false);
+    if (sid === currentSessionId) updateConnectedUI();
+  };
+  socket.onerror = () => {
+    sessionConnected.set(sid, false);
+    if (sid === currentSessionId) updateConnectedUI();
+  };
+  socket.onmessage = e => {
+    try { handleMsg(JSON.parse(e.data), sid); } catch {}
+  };
 }
 
-function setConnected(v) {
-  connected = v;
+function updateConnectedUI() {
+  const v = sessionConnected.get(currentSessionId) || false;
   document.getElementById('statusDot').className = 'status-dot ' + (v ? 'on' : 'off');
   document.getElementById('statusText').textContent = v ? '已连接' : '未连接';
   document.getElementById('sendBtn').disabled = !v;
@@ -414,6 +492,7 @@ function resetStreaming() {
 }
 
 function showStopBtn(show) {
+  if (currentSessionId) sessionIsGenerating.set(currentSessionId, show);
   document.getElementById('stopBtn').style.display = show ? 'inline-block' : 'none';
   document.getElementById('sendBtn').style.display = show ? 'none' : 'inline-block';
 }
@@ -441,22 +520,49 @@ async function stopGeneration() {
 
 // --- Message Handling ---
 
-function handleMsg(msg) {
+function handleMsg(msg, sid) {
+  sid = sid || currentSessionId;
   if (msg.type === 'system' && msg.subtype === 'init') return;
   if (msg.type === 'assistant') {
     const content = msg.message?.content;
     if (!content) return;
+    // stream-json 的 assistant 消息是全量的 content 数组，需要重新计算而不是累加
+    let st = '';
+    let sth = '';
     for (const block of content) {
-      if (block.type === 'thinking') { streamingThinking += (block.thinking || block.text || ''); updateStreamingBubble(); }
-      else if (block.type === 'text') { streamingText += block.text; updateStreamingBubble(); }
-      else if (block.type === 'tool_use') { finalizeStreaming(); addToolMsg(block.name, block.input ? JSON.stringify(block.input, null, 2) : ''); }
-      else if (block.type === 'tool_result') { addToolMsg('result', block.content || ''); }
+      if (block.type === 'thinking') { sth += (block.thinking || block.text || ''); }
+      else if (block.type === 'text') { st += block.text; }
+      else if (block.type === 'tool_use') {
+        if (sid === currentSessionId) { streamingText = st; streamingThinking = sth; finalizeStreaming(); }
+        if (sid === currentSessionId) addToolMsg(block.name, block.input ? JSON.stringify(block.input, null, 2) : '');
+      }
+      else if (block.type === 'tool_result') {
+        if (sid === currentSessionId) addToolMsg('result', block.content || '');
+      }
     }
+    sessionStreamingText.set(sid, st);
+    sessionStreamingThinking.set(sid, sth);
+    if (sid === currentSessionId) { streamingText = st; streamingThinking = sth; updateStreamingBubble(); }
     return;
   }
-  if (msg.type === 'result') { finalizeStreaming(); showStopBtn(false); isGenerating = false; loadChatList(); return; }
-  if (msg.type === 'stopped') { finalizeStreaming(); addStoppedMsg(); resetStreaming(); return; }
-  if (msg.type === 'error') { addSystemMsg(msg.content || 'Unknown error'); return; }
+  if (msg.type === 'result') {
+    if (sid === currentSessionId) { finalizeStreaming(); showStopBtn(false); }
+    sessionIsGenerating.set(sid, false);
+    sessionStreamingText.set(sid, '');
+    sessionStreamingThinking.set(sid, '');
+    sessionAssistantEl.set(sid, null);
+    loadChatList();
+    return;
+  }
+  if (msg.type === 'stopped') {
+    if (sid === currentSessionId) { finalizeStreaming(); addStoppedMsg(); }
+    sessionIsGenerating.set(sid, false);
+    sessionStreamingText.set(sid, '');
+    sessionStreamingThinking.set(sid, '');
+    sessionAssistantEl.set(sid, null);
+    return;
+  }
+  if (msg.type === 'error') { if (sid === currentSessionId) addSystemMsg(msg.content || 'Unknown error'); return; }
 }
 
 function ensureAssistantBubble() {
@@ -486,6 +592,7 @@ function finalizeStreaming() {
   html += marked.parse(streamingText);
   currentAssistantEl.querySelector('.bubble').innerHTML = html;
   currentAssistantEl = null; streamingText = ''; streamingThinking = '';
+  if (currentSessionId) sessionAssistantEl.set(currentSessionId, null);
 }
 
 function addUserMsg(text) { const el = document.createElement('div'); el.className = 'msg msg-user'; el.innerHTML = '<div class="bubble">' + escapeHtml(text) + '</div>'; document.getElementById('messagesInner').appendChild(el); scrollBottom(true); }
@@ -506,7 +613,7 @@ async function editWorkspace() {
   async function save() {
     const val = input.value.trim();
     if (val && val !== current) {
-      try { const res = await fetch(API + '/api/workspace', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({workspace: val}) }); const data = await res.json(); el.textContent = data.workspace; setConnected(connected); return; } catch (err) { addSystemMsg('更新工作目录失败: ' + err.message); }
+      try { const res = await fetch(API + '/api/workspace', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({workspace: val}) }); const data = await res.json(); el.textContent = data.workspace; updateConnectedUI(); return; } catch (err) { addSystemMsg('更新工作目录失败: ' + err.message); }
     }
     el.textContent = current;
   }
@@ -514,14 +621,167 @@ async function editWorkspace() {
   input.addEventListener('blur', save);
 }
 
-function sendMessage() {
+// --- File Upload ---
+let selectedFiles = [];
+
+function handleFileSelect(event) {
+  const files = Array.from(event.target.files);
+  if (!files.length) return;
+  
+  // Check file size (max 20MB)
+  const maxSize = 20 * 1024 * 1024;
+  for (const file of files) {
+    if (file.size > maxSize) {
+      alert(`文件 ${file.name} 超过 20MB 限制`);
+      return;
+    }
+  }
+  
+  selectedFiles = selectedFiles.concat(files);
+  renderFilePreview();
+  event.target.value = ''; // Reset input
+}
+
+function renderFilePreview() {
+  const preview = document.getElementById('filePreview');
+  if (!selectedFiles.length) {
+    preview.style.display = 'none';
+    preview.innerHTML = '';
+    return;
+  }
+  
+  preview.style.display = 'flex';
+  preview.innerHTML = '';
+  
+  selectedFiles.forEach((file, index) => {
+    const item = document.createElement('div');
+    item.className = 'file-preview-item';
+    
+    const isImage = file.type.startsWith('image/');
+    let previewContent = '';
+    
+    if (isImage) {
+      const img = document.createElement('img');
+      img.src = URL.createObjectURL(file);
+      img.onload = () => URL.revokeObjectURL(img.src);
+      item.appendChild(img);
+    } else {
+      const icon = document.createElement('div');
+      icon.className = 'file-icon';
+      icon.textContent = getFileIcon(file.name);
+      item.appendChild(icon);
+    }
+    
+    const name = document.createElement('div');
+    name.className = 'file-name';
+    name.textContent = file.name;
+    name.title = file.name;
+    item.appendChild(name);
+    
+    const remove = document.createElement('button');
+    remove.className = 'file-remove';
+    remove.innerHTML = '×';
+    remove.onclick = () => removeFile(index);
+    item.appendChild(remove);
+    
+    preview.appendChild(item);
+  });
+}
+
+function getFileIcon(filename) {
+  const ext = filename.split('.').pop().toLowerCase();
+  const icons = {
+    'pdf': '📄', 'doc': '📝', 'docx': '📝',
+    'xls': '📊', 'xlsx': '📊', 'csv': '📊',
+    'ppt': '📑', 'pptx': '📑',
+    'txt': '📃', 'md': '📃', 'json': '📃',
+    'js': '💻', 'ts': '💻', 'py': '💻', 'java': '💻',
+    'html': '🌐', 'css': '🎨'
+  };
+  return icons[ext] || '📎';
+}
+
+function removeFile(index) {
+  selectedFiles.splice(index, 1);
+  renderFilePreview();
+}
+
+// Drag and drop support
+const inputArea = document.querySelector('.input-area');
+inputArea.addEventListener('dragover', (e) => {
+  e.preventDefault();
+  e.stopPropagation();
+});
+
+inputArea.addEventListener('drop', (e) => {
+  e.preventDefault();
+  e.stopPropagation();
+  
+  const files = Array.from(e.dataTransfer.files);
+  if (!files.length) return;
+  
+  const maxSize = 20 * 1024 * 1024;
+  for (const file of files) {
+    if (file.size > maxSize) {
+      alert(`文件 ${file.name} 超过 20MB 限制`);
+      return;
+    }
+  }
+  
+  selectedFiles = selectedFiles.concat(files);
+  renderFilePreview();
+});
+
+
+async function uploadFiles(files) {
+  if (!files.length) return [];
+  
+  const formData = new FormData();
+  for (const file of files) {
+    formData.append('files', file);
+  }
+  
+  try {
+    const res = await fetch(API + '/api/upload', {
+      method: 'POST',
+      body: formData
+    });
+    
+    if (!res.ok) throw new Error('Upload failed');
+    
+    const data = await res.json();
+    return data.files.map(f => f.path);
+  } catch (err) {
+    console.error('Upload error:', err);
+    alert('文件上传失败: ' + err.message);
+    return [];
+  }
+}
+
+async function sendMessage() {
   const input = document.getElementById('input'); const text = input.value.trim();
-  if (!text || !connected) return;
+  const _conn = sessionConnected.get(currentSessionId); if (!text || !_conn) return;
+  
+  // Upload files first if any
+  let filePaths = [];
+  if (selectedFiles.length) {
+    filePaths = await uploadFiles(selectedFiles);
+    if (!filePaths.length && selectedFiles.length) {
+      // Upload failed, don't send message
+      return;
+    }
+    selectedFiles = [];
+    renderFilePreview();
+  }
+  
   messageHistory.push(text); historyIndex = -1; tempInput = '';
   input.value = '';
   addUserMsg(text); streamingText = ''; streamingThinking = ''; currentAssistantEl = null; isGenerating = true; showStopBtn(true);
   ensureAssistantBubble(); currentAssistantEl.querySelector('.bubble').innerHTML = '<span class="typing">思考中<span class="dot">.</span><span class="dot">.</span><span class="dot">.</span></span>';
-  ws.send(JSON.stringify({ type: 'message', content: text }));
+  const wsConn = wsMap.get(currentSessionId);
+  if (wsConn && wsConn.readyState === WebSocket.OPEN) {
+    wsConn.send(JSON.stringify({ type: 'message', content: text, files: filePaths }));
+  }
 }
 
 function scrollBottom(force) {

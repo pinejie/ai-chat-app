@@ -1,256 +1,44 @@
-"""Claude Code Web Bridge - Backend"""
+"""Claude Code Web Bridge - FastAPI Application."""
 import asyncio
-import json
-import logging
-import time
-import uuid
 import os
-from pathlib import Path
-from dotenv import load_dotenv
-
-# Load .env from backend directory
-load_dotenv(Path(__file__).resolve().parent.parent / '.env')
+import uuid
 from contextlib import asynccontextmanager
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException
+from pathlib import Path
+
+from dotenv import load_dotenv
+from fastapi import FastAPI, File, HTTPException, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
-from typing import Optional
 
-logger = logging.getLogger("claude-bridge")
+from app.claude_session import ClaudeSession
+from app.session_store import SessionStore
+
+# ─── Config ───────────────────────────────────────────────────────────────────
+
+load_dotenv(Path(__file__).resolve().parent.parent / '.env')
 
 WORKSPACE_DIR = os.getenv("WORKSPACE_DIR", os.path.expanduser("~/workspace"))
 ENV_PATH = Path(__file__).resolve().parent.parent / '.env'
 PROJECT_DIR = Path(__file__).resolve().parent.parent.parent
 STATIC_DIR = PROJECT_DIR / "frontend" / "static"
 DATA_DIR = PROJECT_DIR / "data" / "sessions"
-MAX_SESSIONS = int(os.getenv("MAX_SESSIONS", "100"))
 MAX_STORED_SESSIONS = int(os.getenv("MAX_STORED_SESSIONS", "50"))
 SESSION_TTL = int(os.getenv("SESSION_TTL", "3600"))
 
-sessions: dict[str, "ClaudeSession"] = {}
+sessions: dict[str, ClaudeSession] = {}
 
+# ─── Helpers ──────────────────────────────────────────────────────────────────
 
 def _ensure_data_dir():
     DATA_DIR.mkdir(parents=True, exist_ok=True)
 
 
-class SessionStore:
-    """JSONL-based session persistence."""
-
-    @staticmethod
-    def _index_path() -> Path:
-        return DATA_DIR / "index.json"
-
-    @staticmethod
-    def _session_path(session_id: str) -> Path:
-        return DATA_DIR / f"{session_id}.jsonl"
-
-    @classmethod
-    def load_index(cls) -> list[dict]:
-        path = cls._index_path()
-        if not path.exists():
-            return []
-        try:
-            return json.loads(path.read_text(encoding="utf-8"))
-        except (json.JSONDecodeError, OSError):
-            return []
-
-    @classmethod
-    def save_index(cls, index: list[dict]):
-        cls._index_path().write_text(
-            json.dumps(index, ensure_ascii=False, indent=2), encoding="utf-8"
-        )
-
-    @classmethod
-    def add_to_index(cls, session_id: str, title: str):
-        index = cls.load_index()
-        entry = {
-            "id": session_id,
-            "title": title,
-            "created": int(time.time()),
-            "last_active": int(time.time()),
-        }
-        index.insert(0, entry)
-        cls.save_index(index)
-
-    @classmethod
-    def update_title(cls, session_id: str, title: str):
-        index = cls.load_index()
-        for entry in index:
-            if entry["id"] == session_id:
-                entry["title"] = title
-                break
-        cls.save_index(index)
-
-    @classmethod
-    def touch_index(cls, session_id: str):
-        index = cls.load_index()
-        for entry in index:
-            if entry["id"] == session_id:
-                entry["last_active"] = int(time.time())
-                # move to front
-                index.remove(entry)
-                index.insert(0, entry)
-                break
-        cls.save_index(index)
-
-    @classmethod
-    def remove_from_index(cls, session_id: str):
-        index = cls.load_index()
-        index = [e for e in index if e["id"] != session_id]
-        cls.save_index(index)
-
-    @classmethod
-    def append_message(cls, session_id: str, role: str, content: str, **extra):
-        path = cls._session_path(session_id)
-        entry = {"role": role, "content": content, "ts": int(time.time())}
-        entry.update(extra)
-        with open(path, "a", encoding="utf-8") as f:
-            f.write(json.dumps(entry, ensure_ascii=False) + "\n")
-
-    @classmethod
-    def read_history(cls, session_id: str) -> list[dict]:
-        path = cls._session_path(session_id)
-        if not path.exists():
-            return []
-        result = []
-        with open(path, "r", encoding="utf-8") as f:
-            for line in f:
-                line = line.strip()
-                if line:
-                    try:
-                        result.append(json.loads(line))
-                    except json.JSONDecodeError:
-                        pass
-        return result
-
-    @classmethod
-    def delete_session_files(cls, session_id: str):
-        cls._session_path(session_id).unlink(missing_ok=True)
-        cls.remove_from_index(session_id)
-
-
-class ClaudeSession:
-    """Manages a Claude Code session using --resume for continuity"""
-
-    # Available permission modes
-    AVAILABLE_MODES = [
-        {"id": "default", "name": "默认", "description": "每次工具调用都询问权限"},
-        {"id": "acceptEdits", "name": "自动编辑", "description": "自动接受编辑，其他仍询问"},
-        {"id": "plan", "name": "计划模式", "description": "只分析规划，不执行操作"},
-        {"id": "auto", "name": "自动模式", "description": "自动处理大部分操作"},
-        {"id": "bypassPermissions", "name": "无限制", "description": "跳过所有权限检查"},
-    ]
-
-    def __init__(self, session_id: str, workspace: str = WORKSPACE_DIR, permission_mode: str = "bypassPermissions"):
-        self.id = session_id
-        self.workspace = workspace
-        self.permission_mode = permission_mode
-        self.claude_session_id: Optional[str] = None
-        self.websocket: Optional[WebSocket] = None
-        self.process: Optional[asyncio.subprocess.Process] = None
-        self.last_active: float = time.monotonic()
-        self._first_message = True
-
-    def touch(self):
-        self.last_active = time.monotonic()
-        SessionStore.touch_index(self.id)
-
-    async def send_and_stream(self, text: str):
-        """Send message to Claude Code and stream output to WebSocket"""
-        SessionStore.append_message(self.id, "user", text)
-        self.touch()
-
-        if self._first_message:
-            title = text[:20] + ("..." if len(text) > 20 else "")
-            SessionStore.update_title(self.id, title)
-            self._first_message = False
-
-        cmd = [
-            "claude",
-            "-p",
-            "--output-format", "stream-json",
-            "--verbose",
-        ]
-
-        cmd.extend(["--permission-mode", self.permission_mode])
-
-        if self.claude_session_id:
-            cmd.extend(["--resume", self.claude_session_id])
-
-        cmd.append(text)
-
-        process = await asyncio.create_subprocess_exec(
-            *cmd,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-            cwd=self.workspace,
-            env={**os.environ},
-        )
-        self.process = process
-
-        await asyncio.gather(
-            self._read_stdout(process),
-            self._read_stderr(process),
-        )
-        self.process = None
-
-    async def _read_stdout(self, process):
-        if not process.stdout:
-            return
-        current_text = ""
-        while True:
-            line = await process.stdout.readline()
-            if not line:
-                break
-            try:
-                data = json.loads(line.decode().strip())
-                if data.get("type") == "system" and data.get("subtype") == "init":
-                    self.claude_session_id = data.get("session_id")
-                if self.websocket:
-                    await self.websocket.send_json(data)
-                    self.touch()
-                # accumulate assistant text for persistence
-                if data.get("type") == "assistant":
-                    content = data.get("message", {}).get("content", [])
-                    for block in content:
-                        if block.get("type") == "text":
-                            current_text += block.get("text", "")
-                if data.get("type") == "result" and current_text:
-                    SessionStore.append_message(self.id, "assistant", current_text)
-                    current_text = ""
-            except json.JSONDecodeError:
-                if self.websocket:
-                    try:
-                        await self.websocket.send_json({"type": "raw", "content": line.decode().strip()})
-                    except Exception:
-                        pass
-
-    async def _read_stderr(self, process):
-        if not process.stderr:
-            return
-        while True:
-            line = await process.stderr.readline()
-            if not line:
-                break
-            logger.warning("claude stderr: %s", line.decode().strip())
-
-    async def stop(self):
-        if self.process:
-            self.process.terminate()
-            try:
-                await asyncio.wait_for(self.process.wait(), timeout=5)
-            except asyncio.TimeoutError:
-                self.process.kill()
-                await self.process.wait()
-            self.process = None
-
-
-async def cleanup_expired_sessions():
+async def _cleanup_expired_sessions():
     """Periodically remove sessions past TTL with no active WebSocket."""
     while True:
         await asyncio.sleep(60)
+        import time
         now = time.monotonic()
         expired = [
             sid for sid, s in sessions.items()
@@ -259,19 +47,20 @@ async def cleanup_expired_sessions():
         for sid in expired:
             await sessions[sid].stop()
             del sessions[sid]
-        if expired:
-            logger.info("Cleaned up %d expired session(s)", len(expired))
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     _ensure_data_dir()
-    task = asyncio.create_task(cleanup_expired_sessions())
+    SessionStore._set_data_dir(DATA_DIR)
+    task = asyncio.create_task(_cleanup_expired_sessions())
     yield
     task.cancel()
     for session in sessions.values():
         await session.stop()
 
+
+# ─── App ──────────────────────────────────────────────────────────────────────
 
 app = FastAPI(title="Claude Code Web Bridge", version="0.3.0", lifespan=lifespan)
 
@@ -286,6 +75,8 @@ app.add_middleware(
 app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 
 
+# ─── Routes: Core ─────────────────────────────────────────────────────────────
+
 @app.get("/")
 async def index():
     return FileResponse(STATIC_DIR / "index.html")
@@ -296,14 +87,12 @@ def health():
     return {"status": "ok", "active_sessions": len(sessions), "workspace": WORKSPACE_DIR}
 
 
-
-
-
 @app.get("/api/modes")
 def get_modes():
-    """Return available permission modes."""
     return ClaudeSession.AVAILABLE_MODES
 
+
+# ─── Routes: Workspace ────────────────────────────────────────────────────────
 
 @app.post("/api/workspace")
 def update_workspace(body: dict):
@@ -313,7 +102,7 @@ def update_workspace(body: dict):
         raise HTTPException(400, "workspace is required")
     new_dir = os.path.expanduser(new_dir)
     WORKSPACE_DIR = new_dir
-    # Write to .env
+
     lines = []
     if ENV_PATH.exists():
         with open(ENV_PATH, "r", encoding="utf-8") as f:
@@ -331,9 +120,28 @@ def update_workspace(body: dict):
     return {"workspace": WORKSPACE_DIR}
 
 
+
+# ─── Routes: Upload ────────────────────────────────────────────────────────────
+
+UPLOAD_DIR = PROJECT_DIR / "data" / "uploads"
+
+@app.post("/api/upload")
+async def upload_files(files: list[UploadFile] = File(...)):
+    UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+    result = []
+    for file in files:
+        ext = Path(file.filename).suffix
+        saved_name = f"{uuid.uuid4()}{ext}"
+        file_path = UPLOAD_DIR / saved_name
+        file_bytes = await file.read()
+        file_path.write_bytes(file_bytes)
+        result.append({"name": file.filename, "path": str(file_path)})
+    return {"files": result}
+
+# ─── Routes: Sessions ─────────────────────────────────────────────────────────
+
 @app.post("/api/sessions")
 async def create_session():
-    # Auto-evict oldest sessions if at storage limit
     index = SessionStore.load_index()
     while len(index) >= MAX_STORED_SESSIONS:
         oldest = index[-1]
@@ -345,7 +153,7 @@ async def create_session():
         index = SessionStore.load_index()
 
     session_id = str(uuid.uuid4())
-    sessions[session_id] = ClaudeSession(session_id)
+    sessions[session_id] = ClaudeSession(session_id, WORKSPACE_DIR)
     title = "新对话"
     SessionStore.add_to_index(session_id, title)
     return {"session_id": session_id, "title": title}
@@ -384,10 +192,8 @@ async def stop_session(session_id: str):
     return {"ok": True}
 
 
-
 @app.post("/api/sessions/{session_id}/mode")
 def set_session_mode(session_id: str, body: dict):
-    """Set the permission mode for a session."""
     session = sessions.get(session_id)
     if not session:
         raise HTTPException(404, "Session not found")
@@ -398,11 +204,29 @@ def set_session_mode(session_id: str, body: dict):
     session.permission_mode = mode
     return {"mode": mode}
 
+
+@app.put("/api/sessions/{session_id}/title")
+def rename_session(session_id: str, body: dict):
+    new_title = body.get("title", "").strip()
+    if not new_title:
+        raise HTTPException(400, "title is required")
+    index = SessionStore.load_index()
+    found = any(entry["id"] == session_id for entry in index)
+    if not found:
+        raise HTTPException(404, "Session not found")
+    SessionStore.update_title(session_id, new_title, manually_set=True)
+    if session_id in sessions:
+        sessions[session_id]._first_message = False
+    return {"ok": True, "title": new_title}
+
+
+# ─── Routes: WebSocket ────────────────────────────────────────────────────────
+
 @app.websocket("/ws/{session_id}")
 async def websocket_endpoint(websocket: WebSocket, session_id: str):
     await websocket.accept()
     if session_id not in sessions:
-        sessions[session_id] = ClaudeSession(session_id)
+        sessions[session_id] = ClaudeSession(session_id, WORKSPACE_DIR)
     session = sessions[session_id]
     session.websocket = websocket
     session.touch()
@@ -410,31 +234,46 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str):
         while True:
             data = await websocket.receive_json()
             if data.get("type") == "message":
-                asyncio.create_task(session.send_and_stream(data["content"]))
+                files = data.get("files", [])
+                asyncio.create_task(session.send_and_stream(data["content"], files))
     except WebSocketDisconnect:
         session.websocket = None
+        asyncio.create_task(ClaudeSession._generate_summary(session_id))
     except Exception as e:
-        logger.error("WebSocket error: %s", e)
+        import logging
+        logging.getLogger("claude-bridge").error("WebSocket error: %s", e)
         try:
             await websocket.send_json({"type": "error", "content": str(e)})
         except Exception:
             pass
         session.websocket = None
+        asyncio.create_task(ClaudeSession._generate_summary(session_id))
+
+
+# ─── Routes: Projects ─────────────────────────────────────────────────────────
+
+def _validate_project_path(project_name: str, filename: str) -> Path:
+    """Validate and resolve a project file path. Raises HTTPException on failure."""
+    if '..' in project_name or '..' in filename or '/' in filename or '\\' in filename:
+        raise HTTPException(400, "Invalid path")
+    project_root = Path(WORKSPACE_DIR) / "project"
+    file_path = project_root / project_name / filename
+    try:
+        file_path.resolve().relative_to(project_root.resolve())
+    except ValueError:
+        raise HTTPException(400, "Invalid path")
+    return file_path
 
 
 @app.get("/api/projects")
 def list_projects():
-    """List all projects and their document files under {WORKSPACE_DIR}/project/."""
     project_root = Path(WORKSPACE_DIR) / "project"
     if not project_root.exists():
         return {}
     result = {}
     for proj_dir in sorted(project_root.iterdir()):
         if proj_dir.is_dir() and not proj_dir.name.startswith('.'):
-            files = []
-            for f in sorted(proj_dir.iterdir()):
-                if f.is_file() and f.suffix == '.md':
-                    files.append(f.name)
+            files = [f.name for f in sorted(proj_dir.iterdir()) if f.is_file() and f.suffix == '.md']
             if files:
                 result[proj_dir.name] = files
     return result
@@ -442,52 +281,24 @@ def list_projects():
 
 @app.get("/api/projects/{project_name}/content/{filename}")
 def get_project_file_content(project_name: str, filename: str):
-    """Read the content of a project document file."""
-    # Security: prevent path traversal
-    if '..' in project_name or '..' in filename or '/' in filename or '\\' in filename:
-        raise HTTPException(400, "Invalid path")
-    project_root = Path(WORKSPACE_DIR) / "project"
-    file_path = project_root / project_name / filename
-    # Ensure resolved path is still under project root
-    try:
-        file_path.resolve().relative_to(project_root.resolve())
-    except ValueError:
-        raise HTTPException(400, "Invalid path")
+    file_path = _validate_project_path(project_name, filename)
     if not file_path.exists() or not file_path.is_file():
         raise HTTPException(404, "File not found")
-    content = file_path.read_text(encoding="utf-8")
-    return {"filename": filename, "content": content}
+    return {"filename": filename, "content": file_path.read_text(encoding="utf-8")}
 
 
 @app.put("/api/projects/{project_name}/content/{filename}")
 def update_project_file(project_name: str, filename: str, body: dict):
-    """Update (save) a project document file."""
-    if '..' in project_name or '..' in filename or '/' in filename or '\\' in filename:
-        raise HTTPException(400, "Invalid path")
-    project_root = Path(WORKSPACE_DIR) / "project"
-    file_path = project_root / project_name / filename
-    try:
-        file_path.resolve().relative_to(project_root.resolve())
-    except ValueError:
-        raise HTTPException(400, "Invalid path")
+    file_path = _validate_project_path(project_name, filename)
     if not file_path.exists():
         raise HTTPException(404, "File not found")
-    new_content = body.get("content", "")
-    file_path.write_text(new_content, encoding="utf-8")
+    file_path.write_text(body.get("content", ""), encoding="utf-8")
     return {"ok": True, "filename": filename}
 
 
 @app.delete("/api/projects/{project_name}/content/{filename}")
 def delete_project_file(project_name: str, filename: str):
-    """Delete a project document file."""
-    if '..' in project_name or '..' in filename or '/' in filename or '\\' in filename:
-        raise HTTPException(400, "Invalid path")
-    project_root = Path(WORKSPACE_DIR) / "project"
-    file_path = project_root / project_name / filename
-    try:
-        file_path.resolve().relative_to(project_root.resolve())
-    except ValueError:
-        raise HTTPException(400, "Invalid path")
+    file_path = _validate_project_path(project_name, filename)
     if not file_path.exists():
         raise HTTPException(404, "File not found")
     file_path.unlink()
@@ -496,7 +307,6 @@ def delete_project_file(project_name: str, filename: str):
 
 @app.post("/api/projects/{project_name}/content")
 def create_project_file(project_name: str, body: dict):
-    """Create a new project document file."""
     if '..' in project_name or '/' in project_name or '\\' in project_name:
         raise HTTPException(400, "Invalid project name")
     filename = body.get("filename", "").strip()
@@ -507,8 +317,7 @@ def create_project_file(project_name: str, body: dict):
         raise HTTPException(400, "Invalid filename")
     if not filename.endswith('.md'):
         filename += '.md'
-    project_root = Path(WORKSPACE_DIR) / "project"
-    proj_dir = project_root / project_name
+    proj_dir = Path(WORKSPACE_DIR) / "project" / project_name
     proj_dir.mkdir(parents=True, exist_ok=True)
     file_path = proj_dir / filename
     if file_path.exists():
@@ -517,24 +326,7 @@ def create_project_file(project_name: str, body: dict):
     return {"ok": True, "filename": filename}
 
 
-@app.put("/api/sessions/{session_id}/title")
-def rename_session(session_id: str, body: dict):
-    """Rename a session title."""
-    new_title = body.get("title", "").strip()
-    if not new_title:
-        raise HTTPException(400, "title is required")
-    # Check session exists in index
-    index = SessionStore.load_index()
-    found = False
-    for entry in index:
-        if entry["id"] == session_id:
-            found = True
-            break
-    if not found:
-        raise HTTPException(404, "Session not found")
-    SessionStore.update_title(session_id, new_title)
-    return {"ok": True, "title": new_title}
-
+# ─── Entry point ──────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
     import uvicorn
