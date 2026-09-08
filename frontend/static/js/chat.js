@@ -53,6 +53,14 @@ async function newChat() {
   sessionConnected.set(currentSessionId, false);
   updateConnectedUI();
   document.getElementById('messagesInner').innerHTML = '';
+  // 新对话时重置输入区
+  document.getElementById('input').value = '';
+  document.getElementById('input').style.height = 'auto';
+  selectedFiles = [];
+  renderFilePreview();
+  messageHistory = [];
+  historyIndex = -1;
+  tempInput = '';
   try {
     const res = await fetch(API + '/api/sessions', { method: 'POST' });
     const data = await res.json();
@@ -73,13 +81,19 @@ async function switchChat(sessionId) {
     sessionStreamingThinking.set(currentSessionId, streamingThinking);
     sessionIsGenerating.set(currentSessionId, isGenerating);
     sessionAssistantEl.set(currentSessionId, null);
-    // 保存输入状态
+    // 保存输入状态（含权限模式、输入框高度）
+    const _inputEl = document.getElementById('input');
     sessionInputState.set(currentSessionId, {
       history: [...messageHistory],
       index: historyIndex,
       tempInput: tempInput,
-      value: document.getElementById('input').value
+      value: _inputEl.value,
+      mode: currentMode,
+      textareaHeight: _inputEl.style.height || ''
     });
+    // 清空文件预览（File 对象不可跨会话保持）
+    selectedFiles = [];
+    renderFilePreview();
   }
   // DO NOT close old WebSocket - keep it alive
   currentSessionId = sessionId;
@@ -110,17 +124,29 @@ async function switchChat(sessionId) {
   }
   // 恢复输入状态
   const savedInput = sessionInputState.get(sessionId);
+  const _restoreInput = document.getElementById('input');
   if (savedInput) {
     messageHistory = savedInput.history;
     historyIndex = savedInput.index;
     tempInput = savedInput.tempInput;
-    document.getElementById('input').value = savedInput.value;
+    _restoreInput.value = savedInput.value;
+    // 恢复权限模式
+    if (savedInput.mode) {
+      currentMode = savedInput.mode;
+      const modeSelect = document.getElementById('modeSelect');
+      if (modeSelect) modeSelect.value = currentMode;
+    }
+    // 恢复输入框高度
+    _restoreInput.style.height = savedInput.textareaHeight || 'auto';
   } else {
     messageHistory = [];
     historyIndex = -1;
     tempInput = '';
-    document.getElementById('input').value = '';
+    _restoreInput.value = '';
+    _restoreInput.style.height = 'auto';
   }
+  // 根据目标对话的生成状态设置输入区 disabled
+  showStopBtn(isGenerating);
   if (!wsMap.has(sessionId)) { connectWS(); }
   updateConnectedUI();
   await loadChatList();
@@ -170,6 +196,11 @@ function showStopBtn(show) {
   if (currentSessionId) sessionIsGenerating.set(currentSessionId, show);
   document.getElementById('stopBtn').style.display = show ? 'inline-block' : 'none';
   document.getElementById('sendBtn').style.display = show ? 'none' : 'inline-block';
+  // 生成中禁用输入区，防止并发发送
+  const inputEl = document.getElementById('input');
+  inputEl.disabled = show;
+  inputEl.placeholder = show ? '等待回复中...' : '输入消息... (Enter 发送, Shift+Enter 换行)';
+  document.getElementById('uploadBtn').disabled = show;
 }
 
 async function stopGeneration() {

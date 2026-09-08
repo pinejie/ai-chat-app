@@ -149,6 +149,8 @@ body{height:100vh;display:flex;background:var(--bg);color:var(--text);font-famil
 .input-box textarea{flex:1;resize:vertical;min-height:100px;max-height:300px;border:none;background:transparent;padding:10px 14px;color:var(--text);font-size:13px;outline:none;font-family:inherit;width:100%;box-sizing:border-box}
 .input-box:focus-within{border-color:var(--accent)}
 .input-box textarea::placeholder{color:var(--text5)}
+.input-box textarea:disabled{opacity:0.5;cursor:not-allowed}
+.input-box .upload-btn:disabled{opacity:0.4;cursor:not-allowed}
 .input-toolbar{display:flex;align-items:center;gap:6px;padding:6px 10px;}
 .input-toolbar .toolbar-spacer{flex:1}
 .input-box .send-btn,.input-box .stop-btn{width:36px;height:36px;border:none;border-radius:10px;color:#fff;font-size:16px;cursor:pointer;display:flex;align-items:center;justify-content:center}

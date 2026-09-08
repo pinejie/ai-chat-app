@@ -93,6 +93,7 @@ inputArea.addEventListener('dragover', (e) => {
 inputArea.addEventListener('drop', (e) => {
   e.preventDefault();
   e.stopPropagation();
+  if (isGenerating) return;  // 生成中不允许拖拽上传
   
   const files = Array.from(e.dataTransfer.files);
   if (!files.length) return;
@@ -137,6 +138,7 @@ async function uploadFiles(files) {
 
 
 async function sendMessage() {
+  if (isGenerating) return;  // 正在生成中，忽略
   const input = document.getElementById('input'); const text = input.value.trim();
   const _conn = sessionConnected.get(currentSessionId); if (!text || !_conn) return;
   
@@ -154,6 +156,7 @@ async function sendMessage() {
   
   messageHistory.push(text); historyIndex = -1; tempInput = '';
   input.value = '';
+  input.style.height = 'auto';  // 重置输入框高度
   addUserMsg(text); streamingText = ''; streamingThinking = ''; currentAssistantEl = null; isGenerating = true; showStopBtn(true);
   ensureAssistantBubble(); currentAssistantEl.querySelector('.bubble').innerHTML = '<span class="typing">思考中<span class="dot">.</span><span class="dot">.</span><span class="dot">.</span></span>';
   const wsConn = wsMap.get(currentSessionId);

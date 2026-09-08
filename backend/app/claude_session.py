@@ -33,6 +33,7 @@ class ClaudeSession:
         self.last_active: float = 0
         self._summary: Optional[str] = None
         self._first_message = not SessionStore.is_title_manually_set(session_id)
+        self._stream_lock = asyncio.Lock()  # 同一对话同时只允许一个 claude 进程
 
     def touch(self):
         import time
@@ -53,7 +54,12 @@ class ClaudeSession:
         return None
 
     async def send_and_stream(self, text: str, files: list[str] = None):
-        """Send message to Claude Code and stream output to WebSocket"""
+        """Send message to Claude Code and stream output to WebSocket.
+        同一对话同时只允许一个 claude 进程，新消息排队等待。"""
+        async with self._stream_lock:
+            await self._send_and_stream_impl(text, files)
+
+    async def _send_and_stream_impl(self, text: str, files: list[str] = None):
         SessionStore.append_message(self.id, "user", text, files=files)
         self.touch()
 

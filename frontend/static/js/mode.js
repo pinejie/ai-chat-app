@@ -1,5 +1,6 @@
 // --- Permission Mode Selector ---
 let currentMode = 'bypassPermissions';
+const sessionModeMap = new Map(); // sessionId -> mode
 
 async function loadModes() {
   try {
@@ -22,6 +23,7 @@ document.getElementById('modeSelect').addEventListener('change', async function(
   if (!currentSessionId) return;
   const mode = this.value;
   currentMode = mode;
+  sessionModeMap.set(currentSessionId, mode);
   try {
     await fetch(API + '/api/sessions/' + currentSessionId + '/mode', {
       method: 'POST',
