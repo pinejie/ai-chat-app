@@ -157,6 +157,7 @@ async function sendMessage() {
   messageHistory.push(text); historyIndex = -1; tempInput = '';
   input.value = '';
   input.style.height = 'auto';  // 重置输入框高度
+  resetTrace();
   addUserMsg(text); streamingText = ''; streamingThinking = ''; currentAssistantEl = null; isGenerating = true; showStopBtn(true);
   ensureAssistantBubble(); currentAssistantEl.querySelector('.bubble').innerHTML = '<span class="typing">思考中<span class="dot">.</span><span class="dot">.</span><span class="dot">.</span></span>';
   const wsConn = wsMap.get(currentSessionId);

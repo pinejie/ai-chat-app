@@ -41,6 +41,21 @@
 <div class="main" id="chatMain">
   <div class="header"><span>ZD Code</span></div>
   <div class="messages" id="messages"><div class="messages-inner" id="messagesInner"></div></div>
+  <div class="trace-panel" id="tracePanel" style="display:none">
+    <div class="trace-header" onclick="toggleTracePanel()">
+      <span class="trace-title">链路追踪</span>
+      <span class="trace-stats" id="traceStats"></span>
+      <span class="trace-toggle" id="traceToggle">▼</span>
+    </div>
+    <div class="trace-body" id="traceBody">
+      <div class="trace-timeline" id="traceTimeline"></div>
+    </div>
+  </div>
+  <div class="trace-bar" id="traceBar" onclick="toggleTracePanel()">
+    <span class="trace-bar-dot" id="traceBarDot"></span>
+    <span class="trace-bar-text" id="traceBarText">链路追踪</span>
+    <span class="trace-bar-toggle">▲</span>
+  </div>
   <div class="input-area">
     <div class="input-inner">
       <div class="input-box">
@@ -92,6 +107,7 @@
 <script src="/static/js/app.js"></script>
 <script src="/static/js/theme.js"></script>
 <script src="/static/js/chat.js"></script>
+<script src="/static/js/trace.js"></script>
 <script src="/static/js/upload.js"></script>
 <script src="/static/js/mode.js"></script>
 <script src="/static/js/project.js"></script>

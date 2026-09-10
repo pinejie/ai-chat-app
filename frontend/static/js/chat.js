@@ -61,6 +61,10 @@ async function newChat() {
   messageHistory = [];
   historyIndex = -1;
   tempInput = '';
+  resetTrace();
+  document.getElementById('traceBar').style.display = 'none';
+  document.getElementById('tracePanel').style.display = 'none';
+  tracePanelOpen = false;
   try {
     const res = await fetch(API + '/api/sessions', { method: 'POST' });
     const data = await res.json();
@@ -150,6 +154,59 @@ async function switchChat(sessionId) {
   if (!wsMap.has(sessionId)) { connectWS(); }
   updateConnectedUI();
   await loadChatList();
+  // Load trace for this session
+  _loadSessionTrace(sessionId);
+}
+
+async function _loadSessionTrace(sessionId) {
+  try {
+    const res = await fetch(API + '/api/sessions/' + sessionId + '/trace');
+    const data = await res.json();
+    if (data.spans && data.spans.length > 0) {
+      resetTrace();
+      const bar = document.getElementById('traceBar');
+      bar.style.display = 'flex';
+      // Replay spans into trace panel
+      for (const span of data.spans) {
+        if (span.type === 'tool') {
+          const ev = { ...span, event: 'tool_start' };
+          addTraceItem(ev, span.status || 'success');
+          if (span.end) {
+            updateTraceItem({ ...span, event: 'tool_end' });
+          }
+        } else if (span.type === 'llm') {
+          addTraceLLMItem({ ...span, event: 'llm_call' });
+        }
+      }
+      if (data.issues && data.issues.length > 0) {
+        const timeline = document.getElementById('traceTimeline');
+        for (const issue of data.issues) {
+          const item = document.createElement('div');
+          item.className = 'trace-item trace-issue';
+          item.innerHTML = '<span class="trace-item-icon">⚠️</span><span class="trace-item-name">' + _esc(issue) + '</span>';
+          timeline.appendChild(item);
+        }
+      }
+      // Update stats
+      const tools = data.spans.filter(s => s.type === 'tool');
+      const llms = data.spans.filter(s => s.type === 'llm');
+      const errs = tools.filter(s => s.status === 'error');
+      const totalIn = llms.reduce((a, s) => a + (s.input_tokens || 0), 0);
+      const totalOut = llms.reduce((a, s) => a + (s.output_tokens || 0), 0);
+      document.getElementById('traceStats').textContent =
+        'LLM: ' + llms.length + '次 | 工具: ' + tools.length + '次 | Token: ' + totalIn + '→' + totalOut + (errs.length ? ' | 错误: ' + errs.length : '');
+      const dot = document.getElementById('traceBarDot');
+      dot.className = 'trace-bar-dot ' + (errs.length > 0 ? 'dot-error' : 'dot-done');
+      document.getElementById('traceBarText').textContent = '链路追踪 · ' + (data.live ? '活跃' : '历史');
+    } else {
+      // No trace data - hide the bar
+      document.getElementById('traceBar').style.display = 'none';
+      document.getElementById('tracePanel').style.display = 'none';
+      tracePanelOpen = false;
+    }
+  } catch (e) {
+    // Silently fail - trace is optional
+  }
 }
 
 
@@ -193,6 +250,7 @@ function resetStreaming() {
 }
 
 function showStopBtn(show) {
+  isGenerating = show;
   if (currentSessionId) sessionIsGenerating.set(currentSessionId, show);
   document.getElementById('stopBtn').style.display = show ? 'inline-block' : 'none';
   document.getElementById('sendBtn').style.display = show ? 'none' : 'inline-block';
@@ -229,6 +287,8 @@ async function stopGeneration() {
 function handleMsg(msg, sid) {
   sid = sid || currentSessionId;
   if (msg.type === 'system' && msg.subtype === 'init') return;
+  // Trace events
+  if (msg.type === 'trace') { handleTraceEvent(msg); return; }
   if (msg.type === 'assistant') {
     const content = msg.message?.content;
     if (!content) return;

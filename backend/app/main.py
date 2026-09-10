@@ -192,6 +192,20 @@ async def stop_session(session_id: str):
     return {"ok": True}
 
 
+@app.get("/api/sessions/{session_id}/trace")
+def get_session_trace(session_id: str):
+    """Get trace data for a session (persisted from last run, or live if active)."""
+    # If session is active, return live trace
+    if session_id in sessions:
+        live = sessions[session_id].trace.get_current_trace()
+        return {"live": True, **live}
+    # Otherwise load from disk
+    trace = SessionStore.load_trace(session_id)
+    if trace:
+        return {"live": False, **trace}
+    return {"live": False, "spans": [], "issues": []}
+
+
 @app.post("/api/sessions/{session_id}/mode")
 def set_session_mode(session_id: str, body: dict):
     session = sessions.get(session_id)

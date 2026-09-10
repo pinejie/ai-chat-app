@@ -13,6 +13,10 @@ class SessionStore:
     def _set_data_dir(cls, data_dir: Path):
         cls._data_dir = data_dir
 
+    @classmethod
+    def data_dir(cls) -> Path:
+        return cls._data_dir
+
     @staticmethod
     def _index_path() -> Path:
         return SessionStore._data_dir / "index.json"
@@ -157,3 +161,31 @@ class SessionStore:
     def delete_session_files(cls, session_id: str):
         cls._session_path(session_id).unlink(missing_ok=True)
         cls.remove_from_index(session_id)
+        # Also clean up traces
+        trace_path = cls._data_dir.parent / "traces" / f"{session_id}.json"
+        trace_path.unlink(missing_ok=True)
+
+    @classmethod
+    def save_trace(cls, session_id: str, trace_builder) -> None:
+        """Persist trace data for a session."""
+        trace_dir = cls._data_dir.parent / "traces"
+        trace_dir.mkdir(parents=True, exist_ok=True)
+        trace_path = trace_dir / f"{session_id}.json"
+        data = {
+            "session_id": session_id,
+            "updated_at": int(time.time()),
+            "spans": trace_builder.spans,
+            "issues": trace_builder.detect_issues(),
+        }
+        trace_path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    @classmethod
+    def load_trace(cls, session_id: str) -> dict | None:
+        """Load persisted trace for a session."""
+        trace_path = cls._data_dir.parent / "traces" / f"{session_id}.json"
+        if not trace_path.exists():
+            return None
+        try:
+            return json.loads(trace_path.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError):
+            return None
