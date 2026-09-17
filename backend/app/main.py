@@ -1,6 +1,10 @@
 """Claude Code Web Bridge - FastAPI Application."""
 import asyncio
+import mimetypes
 import os
+import shutil
+import subprocess
+import time
 import uuid
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -23,6 +27,8 @@ ENV_PATH = Path(__file__).resolve().parent.parent / '.env'
 PROJECT_DIR = Path(__file__).resolve().parent.parent.parent
 STATIC_DIR = PROJECT_DIR / "frontend" / "static"
 DATA_DIR = PROJECT_DIR / "data" / "sessions"
+PREVIEW_CACHE_DIR = PROJECT_DIR / "data" / "preview_cache"
+SLIDE_CACHE_DIR = PROJECT_DIR / "data" / "slide_cache"
 MAX_STORED_SESSIONS = int(os.getenv("MAX_STORED_SESSIONS", "50"))
 SESSION_TTL = int(os.getenv("SESSION_TTL", "3600"))
 
@@ -266,17 +272,66 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str):
 
 # ─── Routes: Projects ─────────────────────────────────────────────────────────
 
+ROOT_GROUP = "根目录"  # project/ 根层散落文件的虚拟分组名
+
+
 def _validate_project_path(project_name: str, filename: str) -> Path:
-    """Validate and resolve a project file path. Raises HTTPException on failure."""
-    if '..' in project_name or '..' in filename or '/' in filename or '\\' in filename:
+    """Validate and resolve a project file path. Supports subfolder paths (project_name may contain '/')."""
+    if '..' in project_name or '..' in filename or '\\' in filename:
         raise HTTPException(400, "Invalid path")
     project_root = Path(WORKSPACE_DIR) / "project"
-    file_path = project_root / project_name / filename
+    if project_name == ROOT_GROUP:
+        file_path = project_root / filename
+    else:
+        file_path = project_root / project_name / filename
     try:
         file_path.resolve().relative_to(project_root.resolve())
     except ValueError:
         raise HTTPException(400, "Invalid path")
     return file_path
+
+
+
+
+
+def _resolve_path(path: str) -> Path:
+    """Resolve a path relative to project/ root. Validates no path traversal."""
+    if '..' in path or '\\' in path:
+        raise HTTPException(400, "Invalid path")
+    project_root = Path(WORKSPACE_DIR) / "project"
+    file_path = project_root / path
+    try:
+        file_path.resolve().relative_to(project_root.resolve())
+    except ValueError:
+        raise HTTPException(400, "Invalid path")
+    return file_path
+
+@app.get("/api/browse")
+def browse_directory(rel_path: str = ""):
+    """Browse a directory under project/. Returns files + subdirectories.
+    rel_path is relative to project/ root. Empty string = root."""
+    project_root = Path(WORKSPACE_DIR) / "project"
+    if not project_root.exists():
+        return {"files": [], "dirs": []}
+
+    target = project_root / rel_path if rel_path else project_root
+    try:
+        target.resolve().relative_to(project_root.resolve())
+    except ValueError:
+        raise HTTPException(400, "Invalid path")
+    if not target.exists() or not target.is_dir():
+        raise HTTPException(404, "Directory not found")
+
+    files = []
+    dirs = []
+    for item in sorted(target.iterdir()):
+        if item.name.startswith('.'):
+            continue
+        if item.is_file():
+            files.append(item.name)
+        elif item.is_dir():
+            dirs.append(item.name)
+    return {"files": files, "dirs": dirs}
 
 
 @app.get("/api/projects")
@@ -287,61 +342,228 @@ def list_projects():
     result = {}
     for proj_dir in sorted(project_root.iterdir()):
         if proj_dir.is_dir() and not proj_dir.name.startswith('.'):
-            files = [f.name for f in sorted(proj_dir.iterdir()) if f.is_file() and f.suffix == '.md']
-            if files:
-                result[proj_dir.name] = files
+            files = [f.name for f in sorted(proj_dir.iterdir()) if f.is_file() and not f.name.startswith('.')]
+            result[proj_dir.name] = files
+    # project/ 根层散落文件（不在任何子目录里）
+    root_files = [f.name for f in sorted(project_root.iterdir()) if f.is_file() and not f.name.startswith('.')]
+    if root_files:
+        result[ROOT_GROUP] = root_files
     return result
 
 
-@app.get("/api/projects/{project_name}/content/{filename}")
-def get_project_file_content(project_name: str, filename: str):
-    file_path = _validate_project_path(project_name, filename)
+@app.get("/api/projects/download")
+def download_project_file(path: str):
+    """Download any project file as an attachment."""
+    file_path = _resolve_path(path)
     if not file_path.exists() or not file_path.is_file():
         raise HTTPException(404, "File not found")
-    return {"filename": filename, "content": file_path.read_text(encoding="utf-8")}
+    media_type = mimetypes.guess_type(file_path.name)[0] or "application/octet-stream"
+    return FileResponse(file_path, media_type=media_type, filename=file_path.name)
 
 
-@app.put("/api/projects/{project_name}/content/{filename}")
-def update_project_file(project_name: str, filename: str, body: dict):
-    file_path = _validate_project_path(project_name, filename)
+@app.get("/api/projects/content")
+def get_project_file_content(path: str):
+    file_path = _resolve_path(path)
+    if not file_path.exists() or not file_path.is_file():
+        raise HTTPException(404, "File not found")
+    return {"filename": file_path.name, "content": file_path.read_text(encoding="utf-8", errors="replace")}
+
+
+@app.get("/api/projects/image")
+def get_project_image(path: str):
+    """Serve an image file from a project directory (binary-safe)."""
+    file_path = _resolve_path(path)
+    if not file_path.exists() or not file_path.is_file():
+        raise HTTPException(404, "File not found")
+    media_type = mimetypes.guess_type(file_path.name)[0] or "application/octet-stream"
+    return FileResponse(file_path, media_type=media_type)
+
+
+@app.put("/api/projects/content")
+def update_project_file(path: str, body: dict):
+    file_path = _resolve_path(path)
     if not file_path.exists():
         raise HTTPException(404, "File not found")
     file_path.write_text(body.get("content", ""), encoding="utf-8")
-    return {"ok": True, "filename": filename}
+    return {"ok": True, "filename": file_path.name}
 
 
-@app.delete("/api/projects/{project_name}/content/{filename}")
-def delete_project_file(project_name: str, filename: str):
-    file_path = _validate_project_path(project_name, filename)
+@app.delete("/api/projects/content")
+def delete_project_file(path: str):
+    file_path = _resolve_path(path)
     if not file_path.exists():
         raise HTTPException(404, "File not found")
     file_path.unlink()
     return {"ok": True}
 
 
-@app.post("/api/projects/{project_name}/content")
-def create_project_file(project_name: str, body: dict):
-    if '..' in project_name or '/' in project_name or '\\' in project_name:
-        raise HTTPException(400, "Invalid project name")
-    filename = body.get("filename", "").strip()
-    content_text = body.get("content", "")
+@app.post("/api/projects/content")
+def create_project_file(dir: str = "", body: dict = None):
+    """Create a new file. dir = relative directory path from project/ root."""
+    if '..' in dir or '\\' in dir:
+        raise HTTPException(400, "Invalid directory path")
+    filename = (body or {}).get("filename", "").strip()
+    content_text = (body or {}).get("content", "")
     if not filename:
         raise HTTPException(400, "filename is required")
     if '..' in filename or '/' in filename or '\\' in filename:
         raise HTTPException(400, "Invalid filename")
     if not filename.endswith('.md'):
         filename += '.md'
-    proj_dir = Path(WORKSPACE_DIR) / "project" / project_name
-    proj_dir.mkdir(parents=True, exist_ok=True)
-    file_path = proj_dir / filename
+    target_dir = Path(WORKSPACE_DIR) / "project" / dir if dir else Path(WORKSPACE_DIR) / "project"
+    target_dir.mkdir(parents=True, exist_ok=True)
+    file_path = target_dir / filename
     if file_path.exists():
         raise HTTPException(409, "File already exists")
     file_path.write_text(content_text, encoding="utf-8")
     return {"ok": True, "filename": filename}
 
 
+
+# ─── Routes: Features & Preview ───────────────────────────────────────────────
+
+@app.get("/api/features")
+def get_features():
+    """Probe available system features (LibreOffice, etc.)."""
+    lo_path = shutil.which("libreoffice") or shutil.which("soffice")
+    return {
+        "libreoffice": lo_path is not None,
+        "libreoffice_path": lo_path,
+    }
+
+
+@app.get("/api/projects/preview")
+def preview_office_file(path: str):
+    """Convert an Office file (pptx/docx/xlsx) to PDF via LibreOffice and serve it."""
+    file_path = _resolve_path(path)
+    if not file_path.exists() or not file_path.is_file():
+        raise HTTPException(404, "File not found")
+
+    # Check LibreOffice availability
+    lo_bin = shutil.which("libreoffice") or shutil.which("soffice")
+    if not lo_bin:
+        raise HTTPException(503, "LibreOffice is not installed on the server")
+
+    # Check cache: serve existing PDF if source hasn't changed
+    cache_subdir = PREVIEW_CACHE_DIR / Path(path).parent
+    cache_subdir.mkdir(parents=True, exist_ok=True)
+    pdf_name = file_path.stem + ".pdf"
+    cached_pdf = cache_subdir / pdf_name
+
+    source_mtime = file_path.stat().st_mtime
+    if cached_pdf.exists():
+        cached_mtime = cached_pdf.stat().st_mtime
+        if cached_mtime >= source_mtime:
+            return FileResponse(cached_pdf, media_type="application/pdf")
+
+    # Convert via LibreOffice headless
+    try:
+        subprocess.run(
+            [lo_bin, "--headless", "--convert-to", "pdf", "--outdir", str(cache_subdir), str(file_path)],
+            check=True,
+            timeout=60,
+            capture_output=True,
+        )
+    except subprocess.CalledProcessError as e:
+        raise HTTPException(500, "LibreOffice conversion failed: " + e.stderr.decode(errors="replace")[:500])
+    except subprocess.TimeoutExpired:
+        raise HTTPException(504, "LibreOffice conversion timed out")
+    except Exception as e:
+        raise HTTPException(500, "Conversion error: " + str(e))
+
+    if not cached_pdf.exists():
+        raise HTTPException(500, "Conversion produced no output file")
+
+    return FileResponse(cached_pdf, media_type="application/pdf")
+
+
+
+
+@app.get("/api/projects/slides")
+def list_slides(path: str):
+    """Return total slide count for a presentation, generating PNGs from PDF."""
+    file_path = _resolve_path(path)
+    if not file_path.exists() or not file_path.is_file():
+        raise HTTPException(404, "File not found")
+
+    suffix = file_path.suffix.lower()
+    source_mtime = file_path.stat().st_mtime
+
+    # PDF files use the source directly
+    if suffix == ".pdf":
+        pdf_path = file_path
+    else:
+        # Office files: convert to PDF first (reuse preview cache)
+        lo_bin = shutil.which("libreoffice") or shutil.which("soffice")
+        if not lo_bin:
+            raise HTTPException(503, "LibreOffice is not installed")
+        pdf_cache_dir = PREVIEW_CACHE_DIR / Path(path).parent
+        pdf_cache_dir.mkdir(parents=True, exist_ok=True)
+        pdf_path = pdf_cache_dir / (file_path.stem + ".pdf")
+        if not pdf_path.exists() or pdf_path.stat().st_mtime < source_mtime:
+            try:
+                subprocess.run(
+                    [lo_bin, "--headless", "--convert-to", "pdf", "--outdir", str(pdf_cache_dir), str(file_path)],
+                    check=True, timeout=60, capture_output=True,
+                )
+            except subprocess.CalledProcessError as e:
+                raise HTTPException(500, "PDF conversion failed: " + e.stderr.decode(errors="replace")[:500])
+            except subprocess.TimeoutExpired:
+                raise HTTPException(504, "Conversion timed out")
+        if not pdf_path.exists():
+            raise HTTPException(500, "PDF conversion produced no output")
+
+    # Render PNG cache per page
+    slide_dir = SLIDE_CACHE_DIR / Path(path).parent / file_path.stem
+    marker = slide_dir / ".mtime"
+
+    if slide_dir.exists() and marker.exists():
+        try:
+            cached_mtime = float(marker.read_text().strip())
+            if cached_mtime >= source_mtime and any(slide_dir.glob("page_*.png")):
+                pages = sorted(slide_dir.glob("page_*.png"))
+                return {"total": len(pages)}
+        except (ValueError, OSError):
+            pass
+
+    slide_dir.mkdir(parents=True, exist_ok=True)
+    try:
+        import fitz
+        doc = fitz.open(str(pdf_path))
+        for old in slide_dir.glob("page_*.png"):
+            old.unlink()
+        for i, page in enumerate(doc, start=1):
+            pix = page.get_pixmap(dpi=150)
+            pix.save(str(slide_dir / f"page_{i}.png"))
+        total = len(doc)
+        doc.close()
+        marker.write_text(str(source_mtime))
+    except Exception as e:
+        raise HTTPException(500, f"Slide rendering failed: {e}")
+
+    return {"total": total}
+
+
+@app.get("/api/projects/slide_page")
+def get_slide_page(path: str, page: int):
+    """Serve a single slide PNG (1-indexed)."""
+    if page < 1:
+        raise HTTPException(400, "page must be >= 1")
+    file_path = _resolve_path(path)
+    slide_dir = SLIDE_CACHE_DIR / Path(path).parent / file_path.stem
+    png_path = slide_dir / f"page_{page}.png"
+    if not png_path.exists():
+        raise HTTPException(404, "Slide not found (call /slides first)")
+    return FileResponse(png_path, media_type="image/png")
+
 # ─── Entry point ──────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("app.main:app", host="0.0.0.0", port=8000, reload=False)
+
+@app.get("/api/sessions/{session_id}/generating")
+async def session_generating(session_id: str):
+    """前端刷新后用来恢复按钮状态：true=还在生成，false=空闲。"""
+    session = sessions.get(session_id)
+    return {"generating": session is not None and session.process is not None}

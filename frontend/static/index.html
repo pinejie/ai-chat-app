@@ -4,10 +4,10 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>ZD Code</title>
-<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/highlight.js@11/styles/github-dark.min.css" id="hljs-dark">
-<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/highlight.js@11/styles/github.min.css" id="hljs-light" disabled>
+<link rel="stylesheet" href="/static/highlight-theme-dark.css" id="hljs-dark">
+<link rel="stylesheet" href="/static/highlight-theme-light.css" id="hljs-light" disabled>
 <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/highlight.js@11/highlight.min.js"></script>
+<script src="/static/js/highlight.min.js"></script>
 <link rel="stylesheet" href="/static/style.css">
 </head>
 <body>
@@ -38,50 +38,16 @@
     </div>
   </div>
 </div>
-<div class="main" id="chatMain">
-  <div class="header"><span>ZD Code</span></div>
-  <div class="messages" id="messages"><div class="messages-inner" id="messagesInner"></div></div>
-  <div class="trace-panel" id="tracePanel" style="display:none">
-    <div class="trace-header" onclick="toggleTracePanel()">
-      <span class="trace-title">链路追踪</span>
-      <span class="trace-stats" id="traceStats"></span>
-      <span class="trace-toggle" id="traceToggle">▼</span>
-    </div>
-    <div class="trace-body" id="traceBody">
-      <div class="trace-timeline" id="traceTimeline"></div>
-    </div>
-  </div>
-  <div class="trace-bar" id="traceBar" onclick="toggleTracePanel()">
-    <span class="trace-bar-dot" id="traceBarDot"></span>
-    <span class="trace-bar-text" id="traceBarText">链路追踪</span>
-    <span class="trace-bar-toggle">▲</span>
-  </div>
-  <div class="input-area">
-    <div class="input-inner">
-      <div class="input-box">
-<textarea id="input" rows="1" placeholder="输入消息... (Enter 发送, Shift+Enter 换行)"></textarea>
-        <div class="input-toolbar">
-          <button class="upload-btn" id="uploadBtn" onclick="document.getElementById('fileInput').click()" title="上传文件">&#128206;</button>
-          <input type="file" id="fileInput" multiple style="display:none" onchange="handleFileSelect(event)">
-          <div class="toolbar-spacer"></div>
-          <select class="mode-select" id="modeSelect" title="切换权限模式">
-            <option value="bypassPermissions">无限制</option>
-          </select>
-          <button class="stop-btn" id="stopBtn" onclick="stopGeneration()">G</button>
-          <button class="send-btn" id="sendBtn" onclick="sendMessage()" disabled>&#8593;</button>
-        </div>
-        <div class="file-preview" id="filePreview" style="display:none"></div>
-      </div>
-    </div>
-  </div>
-</div>
+<div id="chatMain"></div>
 <div class="doc-view" id="docView">
   <div class="doc-header">
     <button class="doc-back" onclick="closeDocView()">&#8592; 返回</button>
     <span class="doc-title" id="docTitle"></span>
     <div class="doc-actions">
-      <button class="doc-btn" onclick="editDoc()">编辑</button>
-      <button class="doc-btn" onclick="showNewDocModal()">新建</button>
+      <button class="doc-btn" id="docPreviewBtn" onclick="toggleHtmlPreview()" style="display:none">预览</button>
+      <button class="doc-btn" id="docFullscreenBtn" onclick="toggleSlideViewer()" style="display:none" title="全屏幻灯片 (↑↓翻页)">&#9974; 全屏</button>
+      <button class="doc-btn" id="docEditBtn" onclick="editDoc()">编辑</button>
+      <button class="doc-btn" id="docNewBtn" onclick="showNewDocModal()">新建</button>
       <button class="doc-btn danger" onclick="deleteDoc()">删除</button>
     </div>
   </div>
@@ -94,6 +60,23 @@
     </div>
   </div>
 </div>
+<div class="slide-viewer" id="slideViewer">
+  <div class="slide-viewer-header">
+    <span class="slide-viewer-title" id="slideViewerTitle"></span>
+    <span class="slide-viewer-counter" id="slideViewerCounter"></span>
+    <button class="slide-viewer-close" id="slideViewerCloseBtn" onclick="closeSlideViewer()">&times;</button>
+  </div>
+  <div class="slide-viewer-body" id="slideViewerBody">
+    <button class="slide-nav-btn slide-nav-prev" onclick="prevSlide()" title="上一页 (↑)">&#8249;</button>
+    <div class="slide-img-container" id="slideImgContainer">
+      <img class="slide-img" id="slideImg" alt="" onclick="nextSlide()" title="点击下一页">
+    </div>
+    <button class="slide-nav-btn slide-nav-next" onclick="nextSlide()" title="下一页 (↓)">&#8250;</button>
+  </div>
+  <div class="slide-viewer-loading" id="slideViewerLoading" style="display:none">
+    <span>&#9203; 正在准备幻灯片，请稍候...</span>
+  </div>
+</div>
 <div class="modal-overlay" id="modalOverlay">
   <div class="modal-box">
     <div class="modal-title" id="modalTitle">新建文档</div>
@@ -104,12 +87,14 @@
     </div>
   </div>
 </div>
-<script src="/static/js/app.js"></script>
-<script src="/static/js/theme.js"></script>
-<script src="/static/js/chat.js"></script>
-<script src="/static/js/trace.js"></script>
-<script src="/static/js/upload.js"></script>
-<script src="/static/js/mode.js"></script>
-<script src="/static/js/project.js"></script>
+<!-- Global file input (shared across sessions) -->
+<input type="file" id="fileInput" multiple style="display:none" onchange="handleFileSelect(event)">
+<script src="/static/js/app.js?v=1789616029"></script>
+<script src="/static/js/theme.js?v=1789616029"></script>
+<script src="/static/js/chat.js?v=1789616029"></script>
+<script src="/static/js/trace.js?v=1789616029"></script>
+<script src="/static/js/upload.js?v=1789616029"></script>
+<script src="/static/js/mode.js?v=1789616029"></script>
+<script src="/static/js/project.js?v=1789616029"></script>
 </body>
 </html>

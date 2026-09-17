@@ -92,6 +92,24 @@ class SessionStore:
         return None
 
     @classmethod
+    def clear_claude_session_id(cls, session_id: str):
+        """Invalidate the Claude-side session (used after context compaction)."""
+        index = cls.load_index()
+        for entry in index:
+            if entry["id"] == session_id:
+                entry.pop("claude_session_id", None)
+                break
+        cls.save_index(index)
+
+    @classmethod
+    def get_last_active(cls, session_id: str) -> int:
+        index = cls.load_index()
+        for entry in index:
+            if entry["id"] == session_id:
+                return entry.get("last_active", 0)
+        return 0
+
+    @classmethod
     def update_summary(cls, session_id: str, summary: str, summary_generated_at: int):
         index = cls.load_index()
         for entry in index:

@@ -13,6 +13,15 @@ from app.session_store import SessionStore
 
 logger = logging.getLogger("claude-bridge")
 
+def _compaction_cfg() -> dict:
+    """Context compaction config (override via .env)."""
+    return {
+        "window": int(os.getenv("CONTEXT_WINDOW", "200000")),
+        "ratio": float(os.getenv("COMPACTION_RATIO", "0.4")),
+        "max_turns": int(os.getenv("COMPACTION_MAX_TURNS", "30")),
+        "idle_minutes": int(os.getenv("COMPACTION_IDLE_MINUTES", "30")),
+    }
+
 
 class TraceBuilder:
     """Builds a structured trace from Claude Code stream-json events."""
@@ -195,6 +204,7 @@ class ClaudeSession:
         self._stream_lock = asyncio.Lock()  # 同一对话同时只允许一个 claude 进程
         self.trace = TraceBuilder()
         self._debug_log_path: Optional[str] = None
+        self._compacting = False
 
     def touch(self):
         import time
@@ -218,6 +228,13 @@ class ClaudeSession:
         """Send message to Claude Code and stream output to WebSocket.
         同一对话同时只允许一个 claude 进程，新消息排队等待。"""
         async with self._stream_lock:
+            # 空闲触发：距上条消息超过阈值时，先同步压缩（用户本来就在等回复）
+            if not self._compacting:
+                last_ts = SessionStore.get_last_active(self.id)
+                idle_minutes = _compaction_cfg()["idle_minutes"]
+                if last_ts and time.time() - last_ts > idle_minutes * 60 and self._compaction_needed():
+                    logger.info(f"Idle compaction triggered for session {self.id}")
+                    await self._run_compaction()
             await self._send_and_stream_impl(text, files)
 
     async def _send_and_stream_impl(self, text: str, files: list[str] = None):
@@ -280,6 +297,11 @@ class ClaudeSession:
         )
         self.process = None
 
+        # 轮后检查：上下文超阈值则异步压缩，不阻塞用户
+        if self._compaction_needed():
+            logger.info(f"Compaction needed for session {self.id}, scheduling async")
+            asyncio.create_task(self._run_compaction())
+
     async def _read_stdout(self, process):
         if not process.stdout:
             return
@@ -339,6 +361,41 @@ class ClaudeSession:
                 break
             logger.warning("claude stderr: %s", line.decode().strip())
 
+    def _last_input_tokens(self) -> int:
+        """本会话最近一次 LLM 调用的上下文大小。"""
+        llm_spans = [s for s in self.trace.spans if s.get("type") == "llm" and s.get("input_tokens")]
+        if llm_spans:
+            return llm_spans[-1]["input_tokens"]
+        # 兜底估算：历史总字符 / 3
+        history = SessionStore.read_history(self.id)
+        return sum(len(m.get("content", "")) for m in history) // 3
+
+    def _compaction_needed(self) -> bool:
+        """判断是否需要压缩：摘要已覆盖全部历史则跳过（幂等）。"""
+        if self._load_and_check_summary():
+            return False
+        cfg = _compaction_cfg()
+        tokens = self._last_input_tokens()
+        if tokens >= cfg["window"] * cfg["ratio"]:
+            return True
+        user_msgs = [m for m in SessionStore.read_history(self.id) if m.get("role") == "user"]
+        return len(user_msgs) >= cfg["max_turns"]
+
+    async def _run_compaction(self):
+        """生成摘要并作废旧 Claude 会话；下条消息开新 session 并注入摘要。"""
+        if self._compacting:
+            return
+        self._compacting = True
+        try:
+            await self._generate_summary(self.id)
+            self.claude_session_id = None
+            SessionStore.clear_claude_session_id(self.id)
+            logger.info(f"Compaction done for session {self.id}")
+        except Exception as e:
+            logger.error(f"Compaction failed for session {self.id}: {e}")
+        finally:
+            self._compacting = False
+
     async def stop(self):
         if self.process:
             self.process.terminate()
@@ -363,8 +420,13 @@ class ClaudeSession:
         conv_text = "\n".join(conv_lines)
 
         prompt = (
-            "请总结以下对话的关键信息，包括：项目背景、已解决的问题、技术决策、待办事项。"
-            "用简洁的中文回答，控制在200字以内。只输出摘要内容，不要其他废话。\n\n"
+            "请将以下对话压缩为结构化摘要，必须包含：\n"
+            "1. 背景与目标：这个会话在做什么\n"
+            "2. 关键结论与决策：已确定的方案、选择及原因\n"
+            "3. 具体产物：完整保留对话中出现的 SQL 语句、代码片段、文件路径、配置值（此部分不要省略、不要改写）\n"
+            "4. 待办与未完成事项\n"
+            "5. 最近 3 轮对话的要点（近期上下文优先级最高）\n\n"
+            "用中文输出。第 3 部分可以较长，其余部分保持简洁。只输出摘要内容，不要其他废话。\n\n"
             f"{conv_text}"
         )
 
@@ -401,8 +463,6 @@ class ClaudeSession:
                 import time
                 last_ts = history[-1].get("ts", int(time.time()))
                 SessionStore.update_summary(session_id, full_output.strip(), last_ts)
-                if claude_sid:
-                    SessionStore.save_claude_session_id(session_id, claude_sid)
                 logger.info(f"Summary generated for session {session_id}")
         except Exception as e:
             logger.error(f"Failed to generate summary for session {session_id}: {e}")

@@ -5,16 +5,9 @@ const WS = 'ws://' + window.location.hostname + ':8000';
 let currentSessionId = '';
 let wsMap = new Map();
 let sessionConnected = new Map();
-let sessionStreamingText = new Map();
-let sessionStreamingThinking = new Map();
-let sessionAssistantEl = new Map();
-let sessionIsGenerating = new Map();
-let sessionMsgs = new Map();
 let messageHistory = [];
 let historyIndex = -1;
 let tempInput = '';
-// 按会话隔离输入状态
-const sessionInputState = new Map(); // sessionId -> { history: [], index: -1, tempInput: '', value: '' }
 let streamingText = '';
 let streamingThinking = '';
 let currentAssistantEl = null;
@@ -41,36 +34,15 @@ async function editWorkspace() {
   input.addEventListener('blur', save);
 }
 
-// --- Keyboard & Input Listeners ---
-document.getElementById('input').addEventListener('keydown', function(e) {
-  const input = e.target;
-  if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage(); }
-  if (e.key === 'ArrowUp') {
-    e.preventDefault();
-    if (messageHistory.length === 0) return;
-    if (historyIndex === -1) tempInput = input.value;
-    if (historyIndex < messageHistory.length - 1) {
-      historyIndex++;
-      input.value = messageHistory[messageHistory.length - 1 - historyIndex];
-    }
-  }
-  if (e.key === 'ArrowDown') {
-    e.preventDefault();
-    if (historyIndex === -1) return;
-    historyIndex--;
-    if (historyIndex === -1) input.value = tempInput;
-    else input.value = messageHistory[messageHistory.length - 1 - historyIndex];
-  }
-});
-document.getElementById('input').addEventListener('input', function() { this.style.height = 'auto'; this.style.height = Math.min(this.scrollHeight, 120) + 'px'; });
-
-// --- Init is in project.js (last loaded) ---
-
+// scrollBottom — scoped to currentCtx
 function scrollBottom(force) {
-  const el = document.getElementById('messages');
+  if (!currentCtx || !currentCtx.messagesEl) return;
+  const el = currentCtx.messagesEl;
   if (force === true) { el.scrollTop = el.scrollHeight; return; }
-  // Only auto-scroll if user is near bottom (within 80px)
   const isNearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
   if (isNearBottom) el.scrollTop = el.scrollHeight;
 }
+
 function escapeHtml(s) { return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+
+// --- Init is in project.js (last loaded) ---

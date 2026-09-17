@@ -1,3 +1,191 @@
+// --- Per-Session Context: each session owns its COMPLETE DOM ---
+// Messages + Trace + Input area + Buttons — all per-session.
+// Switching = show/hide. No save/restore needed.
+
+const SESSION_HTML = `
+  <div class="header"><span>ZD Code</span></div>
+  <div class="messages"><div class="messages-inner"></div></div>
+  <div class="trace-panel" style="display:none">
+    <div class="trace-header" onclick="toggleTracePanel()">
+      <span class="trace-title">链路追踪</span>
+      <span class="trace-stats"></span>
+      <span class="trace-toggle">▼</span>
+    </div>
+    <div class="trace-body">
+      <div class="trace-timeline"></div>
+    </div>
+  </div>
+  <div class="trace-bar" style="display:none" onclick="toggleTracePanel()">
+    <span class="trace-bar-dot"></span>
+    <span class="trace-bar-text">链路追踪</span>
+    <span class="trace-bar-toggle">▲</span>
+  </div>
+  <div class="input-area">
+    <div class="input-inner">
+      <div class="send-hint"></div>
+      <div class="input-box">
+        <textarea class="chat-textarea" rows="1" placeholder="输入消息... (Enter 发送, Shift+Enter 换行)"></textarea>
+        <div class="input-toolbar">
+          <button class="upload-btn" title="上传文件">&#128206;</button>
+          <div class="toolbar-spacer"></div>
+          <select class="mode-select" title="切换权限模式">
+            <option value="bypassPermissions">无限制</option>
+          </select>
+          <button class="stop-btn" style="display:none">G</button>
+          <button class="send-btn" disabled>&#8593;</button>
+        </div>
+        <div class="file-preview" style="display:none"></div>
+      </div>
+    </div>
+  </div>`;
+
+function newSessionCtx(sid) {
+  const container = document.createElement('div');
+  container.className = 'session-container';
+  container.innerHTML = SESSION_HTML;
+  document.getElementById('chatMain').appendChild(container);
+  container.style.display = 'none';
+
+  const q = sel => container.querySelector(sel);
+  const ctx = {
+    sid,
+    container,
+    q,
+    // Messages
+    messagesEl: q('.messages'),
+    messagesInner: q('.messages-inner'),
+    // Trace
+    tracePanel: q('.trace-panel'),
+    traceBar: q('.trace-bar'),
+    traceTimeline: q('.trace-timeline'),
+    traceBody: q('.trace-body'),
+    traceStats: q('.trace-stats'),
+    traceBarDot: q('.trace-bar-dot'),
+    traceBarText: q('.trace-bar-text'),
+    traceToggle: q('.trace-toggle'),
+    // Input
+    inputEl: q('.chat-textarea'),
+    sendBtn: q('.send-btn'),
+    stopBtn: q('.stop-btn'),
+    uploadBtn: q('.upload-btn'),
+    filePreview: q('.file-preview'),
+    sendHint: q('.send-hint'),
+    modeSelect: q('.mode-select'),
+    // Streaming state
+    streamingText: '',
+    streamingThinking: '',
+    isGenerating: false,
+    assistantEl: null,
+    finalAssistantHtml: '',
+    // Input state
+    inputState: { history: [], index: -1, tempInput: '' },
+    // Trace state
+    traceEvents: [],
+    tracePanelOpen: false,
+    // History loaded flag
+    historyLoaded: false,
+  };
+
+  // Wire up per-session event listeners
+  _attachSessionListeners(ctx);
+  return ctx;
+}
+
+function _attachSessionListeners(ctx) {
+  // Keyboard: Enter to send, ArrowUp/Down for history
+  ctx.inputEl.addEventListener('keydown', function(e) {
+    if (currentCtx !== ctx) return;
+    if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage(); }
+    if (e.key === 'ArrowUp') {
+      e.preventDefault();
+      if (messageHistory.length === 0) return;
+      if (historyIndex === -1) tempInput = this.value;
+      if (historyIndex < messageHistory.length - 1) {
+        historyIndex++;
+        this.value = messageHistory[messageHistory.length - 1 - historyIndex];
+      }
+    }
+    if (e.key === 'ArrowDown') {
+      e.preventDefault();
+      if (historyIndex === -1) return;
+      historyIndex--;
+      if (historyIndex === -1) this.value = tempInput;
+      else this.value = messageHistory[messageHistory.length - 1 - historyIndex];
+    }
+  });
+  // Auto-resize textarea
+  ctx.inputEl.addEventListener('input', function() {
+    this.style.height = 'auto';
+    this.style.height = Math.min(this.scrollHeight, 120) + 'px';
+  });
+  // Upload button → trigger global file input
+  ctx.uploadBtn.addEventListener('click', function() {
+    if (currentCtx !== ctx) return;
+    document.getElementById('fileInput').click();
+  });
+  // Send / Stop buttons
+  ctx.sendBtn.addEventListener('click', function() {
+    if (currentCtx !== ctx) return;
+    sendMessage();
+  });
+  ctx.stopBtn.addEventListener('click', function() {
+    if (currentCtx !== ctx) return;
+    stopGeneration();
+  });
+  // Drag & drop
+  ctx.container.querySelector('.input-area').addEventListener('dragover', e => {
+    e.preventDefault(); e.stopPropagation();
+  });
+  ctx.container.querySelector('.input-area').addEventListener('drop', e => {
+    e.preventDefault(); e.stopPropagation();
+    if (currentCtx !== ctx || isGenerating) return;
+    const files = Array.from(e.dataTransfer.files);
+    if (!files.length) return;
+    const maxSize = 20 * 1024 * 1024;
+    for (const file of files) {
+      if (file.size > maxSize) { alert(`文件 ${file.name} 超过 20MB 限制`); return; }
+    }
+    selectedFiles = selectedFiles.concat(files);
+    renderFilePreview();
+  });
+}
+
+let sessionCtxs = new Map();
+let currentCtx = null;
+
+function switchCtx(targetSid) {
+  // Save globals back to current ctx
+  if (currentCtx) {
+    currentCtx.isGenerating = isGenerating;
+    currentCtx.streamingText = streamingText;
+    currentCtx.streamingThinking = streamingThinking;
+    currentCtx.assistantEl = currentAssistantEl;
+    currentCtx.messagesInner.style.display = 'none';
+    currentCtx.container.style.display = 'none';
+  }
+  // Create or get target ctx
+  if (!sessionCtxs.has(targetSid)) {
+    sessionCtxs.set(targetSid, newSessionCtx(targetSid));
+  }
+  currentCtx = sessionCtxs.get(targetSid);
+  currentSessionId = targetSid;
+  currentCtx.messagesInner.style.display = '';
+  currentCtx.container.style.display = '';
+  // Restore globals from target ctx
+  isGenerating = currentCtx.isGenerating;
+  streamingText = currentCtx.streamingText;
+  streamingThinking = currentCtx.streamingThinking;
+  currentAssistantEl = currentCtx.assistantEl;
+}
+
+function removeCtx(sid) {
+  const ctx = sessionCtxs.get(sid);
+  if (ctx) {
+    ctx.container.remove();
+    sessionCtxs.delete(sid);
+  }
+}
+
 // --- Chat List ---
 
 async function loadChatList() {
@@ -33,10 +221,11 @@ async function deleteChat(sessionId) {
   await fetch(API + '/api/sessions/' + sessionId, { method: 'DELETE' });
   if (wsMap.has(sessionId)) { wsMap.get(sessionId).close(); wsMap.delete(sessionId); }
   sessionConnected.delete(sessionId);
-  sessionMsgs.delete(sessionId);
+  removeCtx(sessionId);
   if (sessionId === currentSessionId) {
     currentSessionId = '';
-    document.getElementById('messagesInner').innerHTML = '';
+    currentCtx = null;
+    streamingText = ''; streamingThinking = ''; isGenerating = false; currentAssistantEl = null;
     updateConnectedUI();
   }
   await loadChatList();
@@ -46,29 +235,25 @@ async function deleteChat(sessionId) {
 // --- Session Management ---
 
 async function newChat() {
-  if (currentSessionId && wsMap.has(currentSessionId)) {
-    wsMap.get(currentSessionId).close();
-    wsMap.delete(currentSessionId);
+  // Save current state
+  if (currentCtx) {
+    currentCtx.isGenerating = isGenerating;
+    currentCtx.streamingText = streamingText;
+    currentCtx.streamingThinking = streamingThinking;
+    currentCtx.assistantEl = currentAssistantEl;
+    currentCtx.messagesInner.style.display = 'none';
+    currentCtx.container.style.display = 'none';
   }
-  sessionConnected.set(currentSessionId, false);
-  updateConnectedUI();
-  document.getElementById('messagesInner').innerHTML = '';
-  // 新对话时重置输入区
-  document.getElementById('input').value = '';
-  document.getElementById('input').style.height = 'auto';
+  // Reset globals
+  messageHistory = []; historyIndex = -1; tempInput = '';
   selectedFiles = [];
-  renderFilePreview();
-  messageHistory = [];
-  historyIndex = -1;
-  tempInput = '';
-  resetTrace();
-  document.getElementById('traceBar').style.display = 'none';
-  document.getElementById('tracePanel').style.display = 'none';
-  tracePanelOpen = false;
+  streamingText = ''; streamingThinking = ''; isGenerating = false; currentAssistantEl = null;
+
   try {
     const res = await fetch(API + '/api/sessions', { method: 'POST' });
     const data = await res.json();
-    currentSessionId = data.session_id;
+    switchCtx(data.session_id);
+    currentCtx.historyLoaded = true; // New session, no history to load
     document.getElementById('sessionId').textContent = currentSessionId.slice(0, 8) + '...';
     connectWS();
     await loadChatList();
@@ -79,136 +264,88 @@ async function newChat() {
 
 async function switchChat(sessionId) {
   if (sessionId === currentSessionId) return;
-  // Save current session streaming state and input state
-  if (currentSessionId) {
-    sessionStreamingText.set(currentSessionId, streamingText);
-    sessionStreamingThinking.set(currentSessionId, streamingThinking);
-    sessionIsGenerating.set(currentSessionId, isGenerating);
-    sessionAssistantEl.set(currentSessionId, null);
-    // 保存输入状态（含权限模式、输入框高度）
-    const _inputEl = document.getElementById('input');
-    sessionInputState.set(currentSessionId, {
-      history: [...messageHistory],
-      index: historyIndex,
-      tempInput: tempInput,
-      value: _inputEl.value,
-      mode: currentMode,
-      textareaHeight: _inputEl.style.height || ''
-    });
-    // 清空文件预览（File 对象不可跨会话保持）
-    selectedFiles = [];
-    renderFilePreview();
-  }
-  // DO NOT close old WebSocket - keep it alive
-  currentSessionId = sessionId;
+
+  // Save current globals + switch container
+  switchCtx(sessionId);
+
+  // Update sidebar
   document.getElementById('sessionId').textContent = sessionId.slice(0, 8) + '...';
-  document.getElementById('messagesInner').innerHTML = '';
-  try {
-    const res = await fetch(API + '/api/sessions/' + sessionId + '/history');
-    const history = await res.json();
-    for (const msg of history) {
-      if (msg.role === 'user') addUserMsg(msg.content);
-      else if (msg.role === 'assistant') addAssistantMsg(msg.content);
+
+  // Reset shared resources
+  selectedFiles = [];
+  renderFilePreview();
+
+  // Restore button state from ctx
+  showStopBtn(currentCtx.isGenerating);
+
+  // Only load history if this container hasn't been populated yet (lazy loading)
+  if (!currentCtx.historyLoaded) {
+    try {
+      const res = await fetch(API + '/api/sessions/' + sessionId + '/history');
+      const history = await res.json();
+      currentCtx.messagesInner.innerHTML = '';
+      currentCtx.assistantEl = null;
+      for (const msg of history) {
+        if (msg.role === 'user') addUserMsg(msg.content);
+        else if (msg.role === 'assistant') addAssistantMsg(msg.content);
+      }
+      currentCtx.historyLoaded = true;
+    } catch (err) {
+      addSystemMsg('加载历史失败: ' + err.message);
     }
-    scrollBottom();
-  } catch (err) {
-    addSystemMsg('加载历史失败: ' + err.message);
   }
-  // Restore streaming state for this session
-  streamingText = sessionStreamingText.get(sessionId) || '';
-  streamingThinking = sessionStreamingThinking.get(sessionId) || '';
-  isGenerating = sessionIsGenerating.get(sessionId) || false;
-  currentAssistantEl = null;
-  if (isGenerating && (streamingText || streamingThinking)) {
-    ensureAssistantBubble();
+
+  // Re-attach to existing streaming bubble in DOM, or create if needed
+  if (currentCtx.isGenerating && (currentCtx.streamingText || currentCtx.streamingThinking)) {
+    // Try to find existing bubble in DOM first (from before we switched away)
+    var existingBubble = currentCtx.messagesInner.querySelector('.msg-assistant:last-child');
+    if (existingBubble) {
+      currentCtx.assistantEl = existingBubble;
+      currentAssistantEl = existingBubble;
+    } else {
+      currentCtx.assistantEl = null;
+      ensureAssistantBubble();
+    }
     updateStreamingBubble();
-    showStopBtn(true);
-  } else {
-    showStopBtn(false);
-  }
-  // 恢复输入状态
-  const savedInput = sessionInputState.get(sessionId);
-  const _restoreInput = document.getElementById('input');
-  if (savedInput) {
-    messageHistory = savedInput.history;
-    historyIndex = savedInput.index;
-    tempInput = savedInput.tempInput;
-    _restoreInput.value = savedInput.value;
-    // 恢复权限模式
-    if (savedInput.mode) {
-      currentMode = savedInput.mode;
-      const modeSelect = document.getElementById('modeSelect');
-      if (modeSelect) modeSelect.value = currentMode;
+  } else if (!currentCtx.isGenerating && currentCtx.finalAssistantHtml) {
+    // Check if bubble was already updated in DOM (by non-current result handler)
+    var existingBubble = currentCtx.messagesInner.querySelector('.msg-assistant:last-child');
+    if (!existingBubble) {
+      // No existing bubble — create one with final content
+      const el = document.createElement('div');
+      el.className = 'msg msg-assistant';
+      el.innerHTML = '<div class="bubble">' + currentCtx.finalAssistantHtml + '</div>';
+      currentCtx.messagesInner.appendChild(el);
     }
-    // 恢复输入框高度
-    _restoreInput.style.height = savedInput.textareaHeight || 'auto';
-  } else {
-    messageHistory = [];
-    historyIndex = -1;
-    tempInput = '';
-    _restoreInput.value = '';
-    _restoreInput.style.height = 'auto';
+    currentCtx.finalAssistantHtml = '';
   }
-  // 根据目标对话的生成状态设置输入区 disabled
-  showStopBtn(isGenerating);
+
+  scrollBottom();
+
+  // Re-assert button state
+  showStopBtn(currentCtx.isGenerating);
+
+  // Check backend generating status on switch
+  fetch(API + "/api/sessions/" + sessionId + "/generating")
+    .then(function(r) { return r.json(); })
+    .then(function(data) {
+      if (currentCtx && currentCtx.sid === sessionId && data.generating !== currentCtx.isGenerating) {
+        showStopBtn(data.generating);
+      }
+    })
+    .catch(function() {});
+
+  // Update mode select
+  const savedMode = sessionModeMap.get(sessionId);
+  if (savedMode && currentCtx.modeSelect) {
+    currentMode = savedMode;
+    currentCtx.modeSelect.value = currentMode;
+  }
+
   if (!wsMap.has(sessionId)) { connectWS(); }
   updateConnectedUI();
   await loadChatList();
-  // Load trace for this session
-  _loadSessionTrace(sessionId);
 }
-
-async function _loadSessionTrace(sessionId) {
-  try {
-    const res = await fetch(API + '/api/sessions/' + sessionId + '/trace');
-    const data = await res.json();
-    if (data.spans && data.spans.length > 0) {
-      resetTrace();
-      const bar = document.getElementById('traceBar');
-      bar.style.display = 'flex';
-      // Replay spans into trace panel
-      for (const span of data.spans) {
-        if (span.type === 'tool') {
-          const ev = { ...span, event: 'tool_start' };
-          addTraceItem(ev, span.status || 'success');
-          if (span.end) {
-            updateTraceItem({ ...span, event: 'tool_end' });
-          }
-        } else if (span.type === 'llm') {
-          addTraceLLMItem({ ...span, event: 'llm_call' });
-        }
-      }
-      if (data.issues && data.issues.length > 0) {
-        const timeline = document.getElementById('traceTimeline');
-        for (const issue of data.issues) {
-          const item = document.createElement('div');
-          item.className = 'trace-item trace-issue';
-          item.innerHTML = '<span class="trace-item-icon">⚠️</span><span class="trace-item-name">' + _esc(issue) + '</span>';
-          timeline.appendChild(item);
-        }
-      }
-      // Update stats
-      const tools = data.spans.filter(s => s.type === 'tool');
-      const llms = data.spans.filter(s => s.type === 'llm');
-      const errs = tools.filter(s => s.status === 'error');
-      const totalIn = llms.reduce((a, s) => a + (s.input_tokens || 0), 0);
-      const totalOut = llms.reduce((a, s) => a + (s.output_tokens || 0), 0);
-      document.getElementById('traceStats').textContent =
-        'LLM: ' + llms.length + '次 | 工具: ' + tools.length + '次 | Token: ' + totalIn + '→' + totalOut + (errs.length ? ' | 错误: ' + errs.length : '');
-      const dot = document.getElementById('traceBarDot');
-      dot.className = 'trace-bar-dot ' + (errs.length > 0 ? 'dot-error' : 'dot-done');
-      document.getElementById('traceBarText').textContent = '链路追踪 · ' + (data.live ? '活跃' : '历史');
-    } else {
-      // No trace data - hide the bar
-      document.getElementById('traceBar').style.display = 'none';
-      document.getElementById('tracePanel').style.display = 'none';
-      tracePanelOpen = false;
-    }
-  } catch (e) {
-    // Silently fail - trace is optional
-  }
-}
-
 
 // --- WebSocket ---
 
@@ -217,7 +354,6 @@ function connectWS() {
   const socket = new WebSocket(WS + '/ws/' + currentSessionId);
   wsMap.set(currentSessionId, socket);
   const sid = currentSessionId;
-  if (!sessionMsgs.has(sid)) sessionMsgs.set(sid, []);
   socket.onopen = () => {
     sessionConnected.set(sid, true);
     if (sid === currentSessionId) updateConnectedUI();
@@ -239,42 +375,60 @@ function updateConnectedUI() {
   const v = sessionConnected.get(currentSessionId) || false;
   document.getElementById('statusDot').className = 'status-dot ' + (v ? 'on' : 'off');
   document.getElementById('statusText').textContent = v ? '已连接' : '未连接';
-  document.getElementById('sendBtn').disabled = !v;
+  if (currentCtx) currentCtx.sendBtn.disabled = !v;
 }
 
 // --- Streaming ---
 
 function resetStreaming() {
   streamingText = ''; streamingThinking = ''; currentAssistantEl = null; isGenerating = false;
+  if (currentCtx) {
+    currentCtx.streamingText = '';
+    currentCtx.streamingThinking = '';
+    currentCtx.assistantEl = null;
+    currentCtx.isGenerating = false;
+  }
   showStopBtn(false);
 }
 
 function showStopBtn(show) {
   isGenerating = show;
-  if (currentSessionId) sessionIsGenerating.set(currentSessionId, show);
-  document.getElementById('stopBtn').style.display = show ? 'inline-block' : 'none';
-  document.getElementById('sendBtn').style.display = show ? 'none' : 'inline-block';
-  // 生成中禁用输入区，防止并发发送
-  const inputEl = document.getElementById('input');
-  inputEl.disabled = show;
-  inputEl.placeholder = show ? '等待回复中...' : '输入消息... (Enter 发送, Shift+Enter 换行)';
-  document.getElementById('uploadBtn').disabled = show;
+  if (currentCtx) currentCtx.isGenerating = show;
+  if (!currentCtx) return;
+  currentCtx.stopBtn.style.display = show ? 'inline-block' : 'none';
+  currentCtx.sendBtn.style.display = show ? 'none' : 'flex';
+  currentCtx.inputEl.placeholder = show ? '等待回复中，可继续输入但不能发送' : '输入消息... (Enter 发送, Shift+Enter 换行)';
+  currentCtx.uploadBtn.disabled = show;
+}
+
+let blockedHintTimer = null;
+function notifyBlockedSend() {
+  if (!currentCtx) return;
+  const inputEl = currentCtx.inputEl;
+  const hint = currentCtx.sendHint;
+  inputEl.classList.remove('shake');
+  void inputEl.offsetWidth;
+  inputEl.classList.add('shake');
+  if (hint) {
+    hint.textContent = '回复还在路上，发不出去哦，再等等～';
+    hint.classList.add('show');
+    clearTimeout(blockedHintTimer);
+    blockedHintTimer = setTimeout(() => hint.classList.remove('show'), 1500);
+  }
 }
 
 async function stopGeneration() {
   if (!currentSessionId) return;
-  
-  // Immediately update UI
   isGenerating = false;
+  if (currentCtx) currentCtx.isGenerating = false;
   if (currentAssistantEl) {
     currentAssistantEl.remove();
     currentAssistantEl = null;
+    if (currentCtx) currentCtx.assistantEl = null;
   }
-  streamingText = "";
-  streamingThinking = "";
+  streamingText = ""; streamingThinking = "";
+  if (currentCtx) { currentCtx.streamingText = ''; currentCtx.streamingThinking = ''; }
   showStopBtn(false);
-  
-  // Send stop request to server
   try {
     await fetch(API + "/api/sessions/" + currentSessionId + "/stop", { method: "POST" });
   } catch (err) {
@@ -287,61 +441,100 @@ async function stopGeneration() {
 function handleMsg(msg, sid) {
   sid = sid || currentSessionId;
   if (msg.type === 'system' && msg.subtype === 'init') return;
-  // Trace events
-  if (msg.type === 'trace') { handleTraceEvent(msg); return; }
+  if (msg.type === 'trace') {
+    if (sid === currentSessionId) handleTraceEvent(msg);
+    return;
+  }
+  if (!sessionCtxs.has(sid)) return;
+  const ctx = sessionCtxs.get(sid);
+  const isCurrent = (sid === currentSessionId);
+
+  if (isCurrent) {
+    streamingText = ctx.streamingText;
+    streamingThinking = ctx.streamingThinking;
+    isGenerating = ctx.isGenerating;
+    currentAssistantEl = ctx.assistantEl;
+  }
+
   if (msg.type === 'assistant') {
     const content = msg.message?.content;
     if (!content) return;
-    // stream-json 的 assistant 消息是全量的 content 数组，需要重新计算而不是累加
-    let st = '';
-    let sth = '';
+    let st = '', sth = '';
     for (const block of content) {
       if (block.type === 'thinking') { sth += (block.thinking || block.text || ''); }
       else if (block.type === 'text') { st += block.text; }
       else if (block.type === 'tool_use') {
-        if (sid === currentSessionId) { streamingText = st; streamingThinking = sth; finalizeStreaming(); }
-        if (sid === currentSessionId) addToolMsg(block.name, block.input ? JSON.stringify(block.input, null, 2) : '');
+        if (isCurrent) {
+          streamingText = st; streamingThinking = sth;
+          ctx.streamingText = st; ctx.streamingThinking = sth;
+          finalizeStreaming(false);
+          addToolMsg(block.name, block.input ? JSON.stringify(block.input, null, 2) : '');
+        }
       }
       else if (block.type === 'tool_result') {
-        if (sid === currentSessionId) addToolMsg('result', block.content || '');
+        if (isCurrent) addToolMsg('result', block.content || '');
       }
     }
-    sessionStreamingText.set(sid, st);
-    sessionStreamingThinking.set(sid, sth);
-    if (sid === currentSessionId) { streamingText = st; streamingThinking = sth; updateStreamingBubble(); }
+    ctx.streamingText = st;
+    ctx.streamingThinking = sth;
+    if (isCurrent) {
+      streamingText = st; streamingThinking = sth;
+      ctx.assistantEl = currentAssistantEl;
+      updateStreamingBubble();
+    }
     return;
   }
+
   if (msg.type === 'result') {
-    if (sid === currentSessionId) { finalizeStreaming(); showStopBtn(false); }
-    sessionIsGenerating.set(sid, false);
-    sessionStreamingText.set(sid, '');
-    sessionStreamingThinking.set(sid, '');
-    sessionAssistantEl.set(sid, null);
+    if (isCurrent) { finalizeStreaming(true); showStopBtn(false); }
+    else {
+      if (ctx.streamingText || ctx.streamingThinking) {
+        let html = '';
+        if (ctx.streamingThinking) html += '<details open><summary class="thinking-summary">思考过程</summary><div class="thinking-content">' + marked.parse(ctx.streamingThinking) + '</div></details>';
+        html += marked.parse(ctx.streamingText);
+        // If streaming bubble exists in DOM, update it with final content
+        if (ctx.assistantEl) {
+          ctx.assistantEl.querySelector('.bubble').innerHTML = html;
+        } else {
+          ctx.finalAssistantHtml = html;
+        }
+      } else if (ctx.assistantEl) {
+        // No content — remove empty bubble
+        ctx.assistantEl.remove();
+      }
+    }
+    ctx.isGenerating = false;
+    ctx.streamingText = ''; ctx.streamingThinking = ''; ctx.assistantEl = null;
     loadChatList();
     return;
   }
   if (msg.type === 'stopped') {
-    if (sid === currentSessionId) { finalizeStreaming(); addStoppedMsg(); }
-    sessionIsGenerating.set(sid, false);
-    sessionStreamingText.set(sid, '');
-    sessionStreamingThinking.set(sid, '');
-    sessionAssistantEl.set(sid, null);
+    if (isCurrent) { finalizeStreaming(false); showStopBtn(false); addStoppedMsg(); }
+    else if (ctx.assistantEl) { ctx.assistantEl.remove(); }
+    ctx.isGenerating = false; ctx.streamingText = ''; ctx.streamingThinking = ''; ctx.assistantEl = null;
     return;
   }
-  if (msg.type === 'error') { if (sid === currentSessionId) addSystemMsg(msg.content || 'Unknown error'); return; }
+  if (msg.type === 'error') {
+    if (isCurrent) { finalizeStreaming(false); showStopBtn(false); addSystemMsg(msg.content || 'Unknown error'); }
+    else if (ctx.assistantEl) { ctx.assistantEl.remove(); }
+    ctx.isGenerating = false; ctx.streamingText = ''; ctx.streamingThinking = ''; ctx.assistantEl = null;
+    return;
+  }
 }
 
 function ensureAssistantBubble() {
-  if (!currentAssistantEl) {
+  if (!currentAssistantEl && currentCtx) {
     currentAssistantEl = document.createElement('div');
     currentAssistantEl.className = 'msg msg-assistant';
     currentAssistantEl.innerHTML = '<div class="bubble"></div>';
-    document.getElementById('messagesInner').appendChild(currentAssistantEl);
+    currentCtx.messagesInner.appendChild(currentAssistantEl);
+    currentCtx.assistantEl = currentAssistantEl;
     scrollBottom();
   }
 }
 
 function updateStreamingBubble() {
+  if (!currentCtx) return;
   ensureAssistantBubble();
   let html = '';
   if (streamingThinking) html += '<details open><summary class="thinking-summary">思考中...</summary><div class="thinking-content">' + marked.parse(streamingThinking) + '</div></details>';
@@ -351,18 +544,56 @@ function updateStreamingBubble() {
   scrollBottom();
 }
 
-function finalizeStreaming() {
-  if (!currentAssistantEl || (!streamingText && !streamingThinking)) { currentAssistantEl = null; streamingText = ''; streamingThinking = ''; return; }
+function finalizeStreaming(save) {
+  const hasContent = streamingText || streamingThinking;
+  if (save && currentCtx && hasContent) {
+    let html = '';
+    if (streamingThinking) html += '<details open><summary class="thinking-summary">思考过程</summary><div class="thinking-content">' + marked.parse(streamingThinking) + '</div></details>';
+    html += marked.parse(streamingText);
+    currentCtx.finalAssistantHtml = html;
+  }
+  if (!currentAssistantEl || !hasContent) {
+    currentAssistantEl = null; streamingText = ''; streamingThinking = '';
+    if (currentCtx) currentCtx.assistantEl = null;
+    return;
+  }
   let html = '';
-  if (streamingThinking) html += '<details><summary class="thinking-summary">思考过程</summary><div class="thinking-content">' + marked.parse(streamingThinking) + '</div></details>';
+  if (streamingThinking) html += '<details open><summary class="thinking-summary">思考过程</summary><div class="thinking-content">' + marked.parse(streamingThinking) + '</div></details>';
   html += marked.parse(streamingText);
   currentAssistantEl.querySelector('.bubble').innerHTML = html;
   currentAssistantEl = null; streamingText = ''; streamingThinking = '';
-  if (currentSessionId) sessionAssistantEl.set(currentSessionId, null);
+  if (currentCtx) currentCtx.assistantEl = null;
 }
 
-function addUserMsg(text) { const el = document.createElement('div'); el.className = 'msg msg-user'; el.innerHTML = '<div class="bubble">' + escapeHtml(text) + '</div>'; document.getElementById('messagesInner').appendChild(el); scrollBottom(true); }
-function addAssistantMsg(text) { const el = document.createElement('div'); el.className = 'msg msg-assistant'; el.innerHTML = '<div class="bubble">' + marked.parse(text) + '</div>'; document.getElementById('messagesInner').appendChild(el); }
-function addToolMsg(name, content) { const el = document.createElement('div'); el.className = 'msg msg-tool'; let inner = '<div class="bubble"><span class="tool-name">[' + escapeHtml(name) + ']</span>'; if (content) { const d = content.length > 500 ? content.slice(0, 500) + '...' : content; inner += '<pre>' + escapeHtml(d) + '</pre>'; } inner += '</div>'; el.innerHTML = inner; document.getElementById('messagesInner').appendChild(el); scrollBottom(); }
-function addSystemMsg(text) { const el = document.createElement('div'); el.className = 'msg-system'; el.textContent = text; document.getElementById('messagesInner').appendChild(el); scrollBottom(); }
-function addStoppedMsg() { const el = document.createElement('div'); el.className = 'msg-stopped'; el.textContent = '已中断'; document.getElementById('messagesInner').appendChild(el); scrollBottom(); }
+// --- Message DOM helpers (all scoped to currentCtx) ---
+
+function addUserMsg(text) {
+  if (!currentCtx) return;
+  const el = document.createElement('div'); el.className = 'msg msg-user';
+  el.innerHTML = '<div class="bubble">' + escapeHtml(text) + '</div>';
+  currentCtx.messagesInner.appendChild(el); scrollBottom(true);
+}
+function addAssistantMsg(text) {
+  if (!currentCtx) return;
+  const el = document.createElement('div'); el.className = 'msg msg-assistant';
+  el.innerHTML = '<div class="bubble">' + marked.parse(text) + '</div>';
+  currentCtx.messagesInner.appendChild(el);
+}
+function addToolMsg(name, content) {
+  if (!currentCtx) return;
+  const el = document.createElement('div'); el.className = 'msg msg-tool';
+  let inner = '<div class="bubble"><span class="tool-name">[' + escapeHtml(name) + ']</span>';
+  if (content) { const d = content.length > 500 ? content.slice(0, 500) + '...' : content; inner += '<pre>' + escapeHtml(d) + '</pre>'; }
+  inner += '</div>'; el.innerHTML = inner;
+  currentCtx.messagesInner.appendChild(el); scrollBottom();
+}
+function addSystemMsg(text) {
+  if (!currentCtx) return;
+  const el = document.createElement('div'); el.className = 'msg-system'; el.textContent = text;
+  currentCtx.messagesInner.appendChild(el); scrollBottom();
+}
+function addStoppedMsg() {
+  if (!currentCtx) return;
+  const el = document.createElement('div'); el.className = 'msg-stopped'; el.textContent = '已中断';
+  currentCtx.messagesInner.appendChild(el); scrollBottom();
+}
