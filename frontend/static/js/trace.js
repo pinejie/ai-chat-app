@@ -109,7 +109,7 @@ function updateTraceStats() {
   if (running.length) parts.push(`执行中: ${running.length}`);
   currentCtx.traceStats.textContent = parts.join(' | ');
 
-  if (running.length > 0) {
+  if (running.length > 0 || currentCtx.isGenerating) {
     currentCtx.traceBarDot.className = 'trace-bar-dot dot-running';
     currentCtx.traceBarText.textContent = '链路追踪 · 执行中';
   } else if (errors.length > 0) {
@@ -143,6 +143,20 @@ function renderTraceComplete(summary, spans) {
       currentCtx.traceTimeline.appendChild(item);
     }
     showTracePanel();
+  }
+
+  // 强制收尾所有仍在"执行中"的明细条目
+  const runningItems = currentCtx.traceTimeline.querySelectorAll('.trace-status-running');
+  for (const el of runningItems) {
+    el.className = 'trace-item-status trace-status-success';
+    el.textContent = '✓ 完成';
+  }
+  // 同时修正父级 trace-item 的 class（去掉 running 样式）
+  for (const el of runningItems) {
+    if (el.parentElement && el.parentElement.classList.contains('trace-running')) {
+      el.parentElement.classList.remove('trace-running');
+      el.parentElement.classList.add('trace-success');
+    }
   }
 }
 

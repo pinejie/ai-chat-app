@@ -229,7 +229,6 @@ async function deleteChat(sessionId) {
     updateConnectedUI();
   }
   await loadChatList();
-  if (!currentSessionId) { newChat(); }
 }
 
 // --- Session Management ---
@@ -330,6 +329,19 @@ async function switchChat(sessionId) {
     .then(function(r) { return r.json(); })
     .then(function(data) {
       if (currentCtx && currentCtx.sid === sessionId && data.generating !== currentCtx.isGenerating) {
+        if (!data.generating && currentCtx.isGenerating) {
+          // Backend done but result was lost — force finalize
+          streamingText = currentCtx.streamingText;
+          streamingThinking = currentCtx.streamingThinking;
+          isGenerating = false;
+          currentAssistantEl = currentCtx.assistantEl;
+          finalizeStreaming(true);
+          currentCtx.isGenerating = false;
+          currentCtx.streamingText = ''; currentCtx.streamingThinking = '';
+          currentCtx.assistantEl = null;
+          currentAssistantEl = null;
+          if (currentCtx.traceStats) updateTraceStats();
+        }
         showStopBtn(data.generating);
       }
     })
@@ -361,6 +373,42 @@ function connectWS() {
   socket.onclose = () => {
     sessionConnected.set(sid, false);
     if (sid === currentSessionId) updateConnectedUI();
+    // If this conversation was generating, check backend for real status
+    if (sessionCtxs.has(sid)) {
+      var ctx = sessionCtxs.get(sid);
+      if (ctx.isGenerating) {
+        setTimeout(function() {
+          fetch(API + "/api/sessions/" + sid + "/generating")
+            .then(function(r) { return r.json(); })
+            .then(function(data) {
+              if (!data.generating && ctx.isGenerating) {
+                // Result was lost — force finalize for this conversation
+                if (sid === currentSessionId) {
+                  streamingText = ctx.streamingText;
+                  streamingThinking = ctx.streamingThinking;
+                  currentAssistantEl = ctx.assistantEl;
+                  finalizeStreaming(true);
+                } else if (ctx.assistantEl && (ctx.streamingText || ctx.streamingThinking)) {
+                  var html = '';
+                  if (ctx.streamingThinking) html += '<details open><summary class="thinking-summary">思考过程</summary><div class="thinking-content">' + marked.parse(ctx.streamingThinking) + '</div></details>';
+                  if (ctx.streamingText) html += marked.parse(ctx.streamingText);
+                  ctx.assistantEl.querySelector('.bubble').innerHTML = html;
+                }
+                ctx.isGenerating = false;
+                ctx.streamingText = ''; ctx.streamingThinking = '';
+                ctx.assistantEl = null;
+                if (sid === currentSessionId) {
+                  isGenerating = false;
+                  currentAssistantEl = null;
+                  updateTraceStats();
+                  showStopBtn(false);
+                }
+              }
+            })
+            .catch(function() {});
+        }, 1000);
+      }
+    }
   };
   socket.onerror = () => {
     sessionConnected.set(sid, false);
