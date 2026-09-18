@@ -509,6 +509,17 @@ function saveDoc() {
   })
   .catch(err => alert('保存失败: ' + err.message));
 }
+function downloadDoc() {
+  if (!currentDocPath) return;
+  const dlUrl = API + '/api/projects/download?path=' + encodeURIComponent(currentDocPath);
+  const a = document.createElement('a');
+  a.href = dlUrl;
+  a.download = currentDocPath.split('/').pop();
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+}
+
 
 function deleteDoc() {
   if (!currentDocPath) return;
