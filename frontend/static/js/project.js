@@ -70,6 +70,8 @@ function renderBrowseItems(data, parentEl, depth, basePath) {
 function createFolderNode(dirName, dirRelPath, projectName, depth) {
   const group = document.createElement('div');
   group.className = 'proj-group';
+  group.setAttribute('data-dir', dirRelPath);
+  group.setAttribute('data-depth', depth);
 
   const header = document.createElement('div');
   header.className = 'proj-name';
@@ -139,6 +141,43 @@ function renderProjectTree(data) {
     return;
   }
   renderBrowseItems(data, el, 0, '');
+}
+
+/**
+ * 局部刷新某个目录的子树：保持该文件夹的展开/折叠状态，只替换其子节点。
+ * dirRelPath 为空字符串时表示根目录，此时整棵树刷新（无法保留展开状态）。
+ */
+function refreshDir(dirRelPath) {
+  if (!dirRelPath && dirRelPath !== '') {
+    return loadProjects();
+  }
+  // 根目录：整棵树刷新
+  if (dirRelPath === '') {
+    return loadProjects();
+  }
+  const escaped = (typeof CSS !== 'undefined' && CSS.escape) ? CSS.escape(dirRelPath) : dirRelPath.replace(/([\\#.:\[\]>+~])/g, '\\$1');
+  const group = document.querySelector('.proj-group[data-dir="' + escaped + '"]');
+  if (!group) {
+    return loadProjects();  // 兜底：找不到对应节点就全树刷新
+  }
+  const childrenEl = group.querySelector(':scope > .proj-files');
+  const depth = parseInt(group.getAttribute('data-depth'), 10) || 0;
+  const indent = (28 + depth * 16) + 'px';
+  childrenEl.innerHTML = '<div class="proj-loading" style="padding:6px 12px 6px ' + indent + ';font-size:11px;color:var(--text4)">加载中...</div>';
+  fetch(API + '/api/browse?rel_path=' + encodeURIComponent(dirRelPath))
+    .then(r => r.json())
+    .then(data => {
+      childrenEl.innerHTML = '';
+      if (data.dirs.length === 0 && data.files.length === 0) {
+        childrenEl.innerHTML = '<div style="padding:6px 12px 6px ' + indent + ';font-size:11px;color:var(--text4)">空文件夹</div>';
+      } else {
+        renderBrowseItems(data, childrenEl, depth + 1, dirRelPath);
+      }
+    })
+    .catch(err => {
+      console.error('refreshDir failed:', err);
+      childrenEl.innerHTML = '<div style="padding:6px 12px;font-size:11px;color:var(--danger2)">加载失败</div>';
+    });
 }
 
 // --- 文件类型辅助 ---
@@ -524,6 +563,8 @@ function downloadDoc() {
 function deleteDoc() {
   if (!currentDocPath) return;
   const filename = currentDocPath.split('/').pop();
+  const lastSlash = currentDocPath.lastIndexOf('/');
+  const parentDir = (lastSlash >= 0) ? currentDocPath.substring(0, lastSlash) : '';
   if (!confirm('确定删除 ' + filename + '？此操作不可恢复。')) return;
   fetch(API + '/api/projects/content?path=' + encodeURIComponent(currentDocPath), {
     method: 'DELETE'
@@ -531,7 +572,7 @@ function deleteDoc() {
   .then(r => { if(!r.ok) throw new Error('Delete failed'); return r.json(); })
   .then(() => {
     closeDocView();
-    loadProjects();
+    refreshDir(parentDir);
   })
   .catch(err => alert('删除失败: ' + err.message));
 }
@@ -559,7 +600,7 @@ function showNewDocModal() {
     })
     .then(r => { if(!r.ok) throw new Error('Create failed'); return r.json(); })
     .then(() => {
-      loadProjects();
+      refreshDir(dirPath);
       // Open the new doc
       const newDocPath = dirPath ? dirPath + '/' + newFilename : newFilename;
       openDocView(newDocPath);
