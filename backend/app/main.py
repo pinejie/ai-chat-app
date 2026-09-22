@@ -258,7 +258,9 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str):
                 asyncio.create_task(session.send_and_stream(data["content"], files))
     except WebSocketDisconnect:
         session.websocket = None
-        asyncio.create_task(ClaudeSession._generate_summary(session_id))
+        # 只在确实需要压缩时才预生成摘要，避免每次刷新页面都白跑一次 LLM
+        if session._compaction_needed():
+            asyncio.create_task(ClaudeSession._generate_summary(session_id))
     except Exception as e:
         import logging
         logging.getLogger("claude-bridge").error("WebSocket error: %s", e)
@@ -267,7 +269,8 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str):
         except Exception:
             pass
         session.websocket = None
-        asyncio.create_task(ClaudeSession._generate_summary(session_id))
+        if session._compaction_needed():
+            asyncio.create_task(ClaudeSession._generate_summary(session_id))
 
 
 # ─── Routes: Projects ─────────────────────────────────────────────────────────

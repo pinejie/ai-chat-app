@@ -20,6 +20,9 @@ def _compaction_cfg() -> dict:
         "ratio": float(os.getenv("COMPACTION_RATIO", "0.4")),
         "max_turns": int(os.getenv("COMPACTION_MAX_TURNS", "30")),
         "idle_minutes": int(os.getenv("COMPACTION_IDLE_MINUTES", "30")),
+        # 摘要生成时喂给模型的料的上限（防止 prompt 随历史无限增长）
+        "max_summary_msgs": int(os.getenv("SUMMARY_MAX_MESSAGES", "100")),
+        "max_summary_msg_chars": int(os.getenv("SUMMARY_MAX_MSG_CHARS", "20000")),
     }
 
 
@@ -276,14 +279,14 @@ class ClaudeSession:
             file_info += "\n请使用 Read 工具读取这些文件内容。\n---"
             text = text + file_info
 
-        cmd.append(text)
-
         # Reset trace for this round
         self.trace = TraceBuilder()
         self.trace.begin()
 
+        # prompt 走 stdin，避免超长消息触发 Linux 128KB argv 限制 (E2BIG)
         process = await asyncio.create_subprocess_exec(
             *cmd,
+            stdin=asyncio.subprocess.PIPE,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
             cwd=self.workspace,
@@ -291,7 +294,15 @@ class ClaudeSession:
         )
         self.process = process
 
+        async def _feed_stdin(proc):
+            try:
+                await proc.stdin.write(text.encode("utf-8"))
+                await proc.stdin.drain()
+            finally:
+                proc.stdin.close()
+
         await asyncio.gather(
+            _feed_stdin(process),
             self._read_stdout(process),
             self._read_stderr(process),
         )
@@ -408,15 +419,28 @@ class ClaudeSession:
 
     @staticmethod
     async def _generate_summary(session_id: str):
-        """Generate summary for a session using claude CLI."""
+        """Generate summary for a session using claude CLI.
+
+        截断保护：只取最近 N 条消息（单条超长的掐头留尾），
+        被截掉的老消息靠上一份摘要链式兜底，避免 prompt 随历史无限增长。
+        prompt 走 stdin，规避 Linux 128KB argv 限制 (E2BIG)。
+        """
         history = SessionStore.read_history(session_id)
         if not history:
             return
 
+        cfg = _compaction_cfg()
+        truncated = len(history) > cfg["max_summary_msgs"]
+        recent = history[-cfg["max_summary_msgs"]:]
+
+        half = cfg["max_summary_msg_chars"] // 2
         conv_lines = []
-        for msg in history:
+        for msg in recent:
             role = "用户" if msg.get("role") == "user" else "助手"
-            conv_lines.append(f"{role}: {msg.get('content', '')}")
+            content = msg.get("content", "")
+            if len(content) > cfg["max_summary_msg_chars"]:
+                content = content[:half] + "\n...(中间内容过长已省略)...\n" + content[-half:]
+            conv_lines.append(f"{role}: {content}")
         conv_text = "\n".join(conv_lines)
 
         prompt = (
@@ -430,26 +454,40 @@ class ClaudeSession:
             f"{conv_text}"
         )
 
+        # 链式兜底：老消息被截掉时，把上一份摘要并入，避免截断点之前的信息丢失
+        if truncated:
+            prev_summary, _ = SessionStore.get_summary(session_id)
+            if prev_summary:
+                prompt = (
+                    "[以下是更早对话的旧摘要，请把其中仍然相关的信息并入新摘要]\n"
+                    f"{prev_summary}\n\n"
+                    "[以下是截断后的最近对话记录]\n"
+                    + prompt
+                )
+
         workspace = os.getenv("WORKSPACE_DIR", os.path.expanduser("~/workspace"))
 
         try:
+            # prompt 走 stdin 喂入，argv 只剩命令和选项，不受 128KB 限制
             process = await asyncio.create_subprocess_exec(
-                "claude", "--bare", "-p", "--output-format", "stream-json", "--verbose", prompt,
+                "claude", "--bare", "-p", "--output-format", "stream-json", "--verbose",
+                stdin=asyncio.subprocess.PIPE,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
                 cwd=workspace,
                 env={**os.environ},
             )
+            stdout_data, _ = await process.communicate(input=prompt.encode("utf-8"))
+            if process.returncode != 0:
+                raise RuntimeError(f"claude exited with code {process.returncode}")
+
             full_output = ""
-            claude_sid = None
-            while True:
-                line = await process.stdout.readline()
+            for line in stdout_data.decode("utf-8", errors="replace").splitlines():
+                line = line.strip()
                 if not line:
-                    break
+                    continue
                 try:
-                    data = json.loads(line.decode().strip())
-                    if data.get("type") == "system" and data.get("subtype") == "init":
-                        claude_sid = data.get("session_id")
+                    data = json.loads(line)
                     if data.get("type") == "assistant":
                         content_blocks = data.get("message", {}).get("content", [])
                         for block in content_blocks:
@@ -457,12 +495,12 @@ class ClaudeSession:
                                 full_output += block.get("text", "")
                 except json.JSONDecodeError:
                     pass
-            await process.wait()
 
             if full_output.strip():
                 import time
                 last_ts = history[-1].get("ts", int(time.time()))
                 SessionStore.update_summary(session_id, full_output.strip(), last_ts)
-                logger.info(f"Summary generated for session {session_id}")
+                logger.info(f"Summary generated for session {session_id}"
+                            f"{' (truncated to last %d msgs)' % cfg['max_summary_msgs'] if truncated else ''}")
         except Exception as e:
             logger.error(f"Failed to generate summary for session {session_id}: {e}")
