@@ -178,8 +178,13 @@ def session_history(session_id: str):
 @app.delete("/api/sessions/{session_id}")
 async def delete_session(session_id: str):
     if session_id in sessions:
-        await sessions[session_id].stop()
-        del sessions[session_id]
+        try:
+            await sessions[session_id].stop()
+        except Exception as e:
+            logging.getLogger("claude-bridge").warning("stop() failed during delete for %s: %s", session_id, e)
+        finally:
+            # 无论 stop 是否成功，都要删记录，否则对话永远删不掉
+            del sessions[session_id]
     SessionStore.delete_session_files(session_id)
     return {"ok": True}
 

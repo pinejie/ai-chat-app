@@ -296,17 +296,20 @@ class ClaudeSession:
 
         async def _feed_stdin(proc):
             try:
-                await proc.stdin.write(text.encode("utf-8"))
+                proc.stdin.write(text.encode("utf-8"))
                 await proc.stdin.drain()
             finally:
                 proc.stdin.close()
 
-        await asyncio.gather(
-            _feed_stdin(process),
-            self._read_stdout(process),
-            self._read_stderr(process),
-        )
-        self.process = None
+        try:
+            await asyncio.gather(
+                _feed_stdin(process),
+                self._read_stdout(process),
+                self._read_stderr(process),
+            )
+        finally:
+            # 无论如何都要清空工牌，否则 stop() 会去拍一个死进程的肩
+            self.process = None
 
         # 轮后检查：上下文超阈值则异步压缩，不阻塞用户
         if self._compaction_needed():
@@ -409,13 +412,21 @@ class ClaudeSession:
 
     async def stop(self):
         if self.process:
-            self.process.terminate()
-            try:
-                await asyncio.wait_for(self.process.wait(), timeout=5)
-            except asyncio.TimeoutError:
-                self.process.kill()
-                await self.process.wait()
+            proc = self.process
             self.process = None
+            try:
+                proc.terminate()
+            except ProcessLookupError:
+                # 进程已经死了，不用拍肩
+                return
+            try:
+                await asyncio.wait_for(proc.wait(), timeout=5)
+            except asyncio.TimeoutError:
+                try:
+                    proc.kill()
+                except ProcessLookupError:
+                    return
+                await proc.wait()
 
     @staticmethod
     async def _generate_summary(session_id: str):
