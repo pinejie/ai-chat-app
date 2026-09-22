@@ -443,27 +443,28 @@ class ClaudeSession:
             conv_lines.append(f"{role}: {content}")
         conv_text = "\n".join(conv_lines)
 
-        prompt = (
-            "请将以下对话压缩为结构化摘要，必须包含：\n"
+        # 链式兜底：老消息被截掉时，把上一份摘要并入，避免截断点之前的信息丢失
+        parts = []
+        if truncated:
+            prev_summary, _ = SessionStore.get_summary(session_id)
+            if prev_summary:
+                parts.append(
+                    "[以下是更早对话的旧摘要，请把其中仍然相关的信息并入新摘要]\n"
+                    f"{prev_summary}\n\n"
+                )
+        parts.append(f"以下是需要压缩的对话记录：\n\n{conv_text}\n\n")
+        # 指令放最后，利用近因效应确保模型按结构输出
+        parts.append(
+            "请将以上对话压缩为结构化摘要，必须包含：\n"
             "1. 背景与目标：这个会话在做什么\n"
             "2. 关键结论与决策：已确定的方案、选择及原因\n"
             "3. 具体产物：完整保留对话中出现的 SQL 语句、代码片段、文件路径、配置值（此部分不要省略、不要改写）\n"
             "4. 待办与未完成事项\n"
             "5. 最近 3 轮对话的要点（近期上下文优先级最高）\n\n"
-            "用中文输出。第 3 部分可以较长，其余部分保持简洁。只输出摘要内容，不要其他废话。\n\n"
-            f"{conv_text}"
+            "用中文输出。第 3 部分可以较长，其余部分保持简洁。"
+            "只输出摘要本身，不要其他废话，不要以对话口吻开头。"
         )
-
-        # 链式兜底：老消息被截掉时，把上一份摘要并入，避免截断点之前的信息丢失
-        if truncated:
-            prev_summary, _ = SessionStore.get_summary(session_id)
-            if prev_summary:
-                prompt = (
-                    "[以下是更早对话的旧摘要，请把其中仍然相关的信息并入新摘要]\n"
-                    f"{prev_summary}\n\n"
-                    "[以下是截断后的最近对话记录]\n"
-                    + prompt
-                )
+        prompt = "".join(parts)
 
         workspace = os.getenv("WORKSPACE_DIR", os.path.expanduser("~/workspace"))
 
