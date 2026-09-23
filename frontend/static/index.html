@@ -23,7 +23,7 @@
   <div class="project-list" id="projectList"></div>
   <div class="sidebar-info">
     <div class="label">状态</div>
-    <div class="value"><span class="status-dot off" id="statusDot"></span><span id="statusText">未连接</span></div>
+    <div class="value"><span class="status-dot off" id="statusDot"></span><span id="statusText">未连接</span><button id="reconnectBtn" class="reconnect-btn" style="display:none" onclick="reconnect()">重连</button></div>
     <div class="label">工作目录</div>
     <div class="value" id="workspaceDir" style="cursor:pointer" title="点击修改" onclick="editWorkspace()">-</div>
     <div class="label">Session</div>
