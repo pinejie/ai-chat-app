@@ -1,4 +1,4 @@
-"""Claude Code session management - subprocess control + streaming + summary."""
+"""Claude Code session management - subprocess control + streaming + history recovery."""
 import asyncio
 import json
 import logging
@@ -12,18 +12,6 @@ from fastapi import WebSocket
 from app.session_store import SessionStore
 
 logger = logging.getLogger("claude-bridge")
-
-def _compaction_cfg() -> dict:
-    """Context compaction config (override via .env)."""
-    return {
-        "window": int(os.getenv("CONTEXT_WINDOW", "200000")),
-        "ratio": float(os.getenv("COMPACTION_RATIO", "0.4")),
-        "max_turns": int(os.getenv("COMPACTION_MAX_TURNS", "30")),
-        "idle_minutes": int(os.getenv("COMPACTION_IDLE_MINUTES", "30")),
-        # 摘要生成时喂给模型的料的上限（防止 prompt 随历史无限增长）
-        "max_summary_msgs": int(os.getenv("SUMMARY_MAX_MESSAGES", "100")),
-        "max_summary_msg_chars": int(os.getenv("SUMMARY_MAX_MSG_CHARS", "20000")),
-    }
 
 
 class TraceBuilder:
@@ -184,7 +172,14 @@ def _summarize_input(tool_name: str, tool_input: dict) -> str:
 
 
 class ClaudeSession:
-    """Manages a Claude Code session using --resume for continuity"""
+    """Manages a Claude Code session using --resume for continuity.
+
+    Context management:
+    - 正常流程：依赖 Claude Code 自身压缩，ai-chat-app 不干预
+    - 恢复流程：session 丢失时，从 JSONL 读历史 → 分批调 Claude Code 压缩
+      （--resume 串联）→ 第一批成功后立即记录 session_id
+      → 失败重试 → 再失败只压缩最后一批 → 再失败放弃
+    """
 
     AVAILABLE_MODES = [
         {"id": "default", "name": "默认", "description": "每次工具调用都询问权限"},
@@ -202,42 +197,28 @@ class ClaudeSession:
         self.websocket: Optional[WebSocket] = None
         self.process: Optional[asyncio.subprocess.Process] = None
         self.last_active: float = 0
-        self._summary: Optional[str] = None
         self._first_message = not SessionStore.is_title_manually_set(session_id)
-        self._stream_lock = asyncio.Lock()  # 同一对话同时只允许一个 claude 进程
+        self._stream_lock = asyncio.Lock()
         self.trace = TraceBuilder()
         self._debug_log_path: Optional[str] = None
-        self._compacting = False
+        self._last_stderr: str = ""
+        self._last_result_is_error: bool = False
+        self._last_error_text: str = ""
 
     def touch(self):
-        import time
         self.last_active = time.monotonic()
         SessionStore.touch_index(self.id)
-
-    def _load_and_check_summary(self) -> str | None:
-        """Load summary if valid (covers all messages before current one)."""
-        summary, generated_at = SessionStore.get_summary(self.id)
-        if not summary or not generated_at:
-            return None
-        history = SessionStore.read_history(self.id)
-        if len(history) >= 2:
-            prev_ts = history[-2].get("ts", 0)
-            if generated_at >= prev_ts:
-                self._summary = summary
-                return summary
-        return None
 
     async def send_and_stream(self, text: str, files: list[str] = None):
         """Send message to Claude Code and stream output to WebSocket.
         同一对话同时只允许一个 claude 进程，新消息排队等待。"""
         async with self._stream_lock:
-            # 空闲触发：距上条消息超过阈值时，先同步压缩（用户本来就在等回复）
-            if not self._compacting:
-                last_ts = SessionStore.get_last_active(self.id)
-                idle_minutes = _compaction_cfg()["idle_minutes"]
-                if last_ts and time.time() - last_ts > idle_minutes * 60 and self._compaction_needed():
-                    logger.info(f"Idle compaction triggered for session {self.id}")
-                    await self._run_compaction()
+            # 检测是否需要恢复（无 session_id 但有历史）
+            if not self.claude_session_id:
+                history = SessionStore.read_history(self.id)
+                if history:
+                    await self._recover_from_history(history, text, files)
+                    return
             await self._send_and_stream_impl(text, files)
 
     async def _send_and_stream_impl(self, text: str, files: list[str] = None):
@@ -248,11 +229,6 @@ class ClaudeSession:
             title = text[:20] + ("..." if len(text) > 20 else "")
             SessionStore.update_title(self.id, title)
             self._first_message = False
-
-        # Inject summary if --resume is not available (no session_id)
-        summary = self._load_and_check_summary()
-        if summary and not self.claude_session_id:
-            text = f"[以下是之前对话的摘要，请据此理解上下文]\n{summary}\n\n[用户新问题]\n{text}"
 
         cmd = [
             "claude",
@@ -279,9 +255,11 @@ class ClaudeSession:
             file_info += "\n请使用 Read 工具读取这些文件内容。\n---"
             text = text + file_info
 
-        # Reset trace for this round
+        # Reset trace and error flag for this round
         self.trace = TraceBuilder()
         self.trace.begin()
+        self._last_result_is_error = False
+        self._last_error_text = ""
 
         # prompt 走 stdin，避免超长消息触发 Linux 128KB argv 限制 (E2BIG)
         process = await asyncio.create_subprocess_exec(
@@ -308,13 +286,49 @@ class ClaudeSession:
                 self._read_stderr(process),
             )
         finally:
-            # 无论如何都要清空工牌，否则 stop() 会去拍一个死进程的肩
             self.process = None
 
-        # 轮后检查：上下文超阈值则异步压缩，不阻塞用户
-        if self._compaction_needed():
-            logger.info(f"Compaction needed for session {self.id}, scheduling async")
-            asyncio.create_task(self._run_compaction())
+        # Check if --resume failed due to session loss
+        # Claude Code outputs errors as JSON result to stdout (is_error=true), not always to stderr
+        had_resume = self.claude_session_id is not None and "--resume" in cmd
+        logger.warning(f"After gather: had_resume={had_resume}, returncode={process.returncode}, is_error={self._last_result_is_error}")
+        logger.warning(f"Error text: '{self._last_error_text}', stderr: '{self._last_stderr[:200]}'")
+        if had_resume and (self._last_result_is_error or process.returncode != 0):
+            combined_text = self._last_error_text + " " + self._last_stderr
+            is_session_not_found = self._is_session_not_found(combined_text)
+            logger.warning(f"combined_text: '{combined_text[:200]}', is_session_not_found: {is_session_not_found}")
+            if is_session_not_found:
+                logger.warning(
+                    "Session %s lost (resume failed), entering recovery",
+                    self.claude_session_id,
+                )
+                # Notify frontend immediately before clearing session_id
+                logger.warning(f"Session lost: websocket={'connected' if self.websocket else 'None'}")
+                if self.websocket:
+                    try:
+                        await self.websocket.send_json({
+                            "type": "recovery_start",
+                            "content": "正在恢复上下文，请稍候...",
+                        })
+                        logger.warning("Sent recovery_start to frontend")
+                    except Exception as e:
+                        logger.warning(f"Failed to send recovery_start: {e}")
+                self.claude_session_id = None
+                SessionStore.clear_claude_session_id(self.id)
+                # Enter recovery flow
+                history = SessionStore.read_history(self.id)
+                if history:
+                    await self._recover_from_history(history, text, files)
+                else:
+                    # No history, just notify and start fresh
+                    if self.websocket:
+                        try:
+                            await self.websocket.send_json({
+                                "type": "error",
+                                "content": "会话已丢失，已开始新对话",
+                            })
+                        except Exception:
+                            pass
 
     async def _read_stdout(self, process):
         if not process.stdout:
@@ -347,6 +361,11 @@ class ClaudeSession:
                         if block.get("type") == "text":
                             current_text += block.get("text", "")
                 if data.get("type") == "result":
+                    # Detect error results (e.g. session not found)
+                    if data.get("is_error"):
+                        self._last_result_is_error = True
+                        errors = data.get("errors", [])
+                        self._last_error_text = " ".join(errors) if errors else ""
                     if current_text:
                         SessionStore.append_message(self.id, "assistant", current_text)
                         current_text = ""
@@ -369,46 +388,251 @@ class ClaudeSession:
     async def _read_stderr(self, process):
         if not process.stderr:
             return
+        self._last_stderr = ""
         while True:
             line = await process.stderr.readline()
             if not line:
                 break
-            logger.warning("claude stderr: %s", line.decode().strip())
+            text = line.decode("utf-8", errors="replace")
+            self._last_stderr += text
+            logger.warning("claude stderr: %s", text.strip())
 
-    def _last_input_tokens(self) -> int:
-        """本会话最近一次 LLM 调用的上下文大小。"""
-        llm_spans = [s for s in self.trace.spans if s.get("type") == "llm" and s.get("input_tokens")]
-        if llm_spans:
-            return llm_spans[-1]["input_tokens"]
-        # 兜底估算：历史总字符 / 3
-        history = SessionStore.read_history(self.id)
-        return sum(len(m.get("content", "")) for m in history) // 3
+    @staticmethod
+    def _is_session_not_found(stderr: str) -> bool:
+        """Detect if session was lost (for --resume failures)."""
+        error_patterns = [
+            "Session not found",
+            "Failed to load session",
+            "session does not exist",
+            "invalid session",
+            "could not find session",
+            "No conversation found",
+        ]
+        return any(p in stderr for p in error_patterns)
 
-    def _compaction_needed(self) -> bool:
-        """判断是否需要压缩：摘要已覆盖全部历史则跳过（幂等）。"""
-        if self._load_and_check_summary():
-            return False
-        cfg = _compaction_cfg()
-        tokens = self._last_input_tokens()
-        if tokens >= cfg["window"] * cfg["ratio"]:
-            return True
-        user_msgs = [m for m in SessionStore.read_history(self.id) if m.get("role") == "user"]
-        return len(user_msgs) >= cfg["max_turns"]
+    # ─── History recovery ───────────────────────────────────────────────
 
-    async def _run_compaction(self):
-        """生成摘要并作废旧 Claude 会话；下条消息开新 session 并注入摘要。"""
-        if self._compacting:
-            return
-        self._compacting = True
+    async def _recover_from_history(self, history: list[dict], text: str, files: list[str]):
+        """从历史记录恢复上下文。
+
+        触发条件：无 claude_session_id 但有历史消息。
+        流程：分批压缩（--resume 串联）→ 第一批成功后立即记录 session_id
+              → 某批失败重试 → 仍失败则降级为只压缩最后一批 → 仍失败则放弃。
+        """
+
+        batches = [history[i:i + 20] for i in range(0, len(history), 20)]
+
+        recovery_session_id = None
+        accumulated_summary = ""
+
+        for i, batch in enumerate(batches):
+            success = False
+
+            for attempt in range(2):  # 最多重试 1 次
+                try:
+                    result = await self._send_batch(
+                        batch, recovery_session_id, accumulated_summary,
+                        is_first=(recovery_session_id is None)
+                    )
+
+                    # 第一批成功后立即保存 session_id
+                    if not recovery_session_id and result["session_id"]:
+                        recovery_session_id = result["session_id"]
+                        self.claude_session_id = recovery_session_id
+                        SessionStore.save_claude_session_id(self.id, recovery_session_id)
+                        logger.info(f"Recovery: session {recovery_session_id} saved after batch 1")
+
+                    # --resume 失败：session 中途丢失
+                    if recovery_session_id and result.get("session_lost"):
+                        logger.warning(f"Recovery: session {recovery_session_id} lost at batch {i + 1}")
+                        recovery_session_id = None
+                        self.claude_session_id = None
+                        SessionStore.clear_claude_session_id(self.id)
+                        break  # 跳出重试，进入降级
+
+                    accumulated_summary = result["summary"]
+                    success = True
+                    break
+
+                except Exception as e:
+                    logger.error(f"Recovery: batch {i + 1} attempt {attempt + 1} failed: {e}")
+
+            if not success:
+                # 重试后仍失败 → 降级：只压缩最后一批
+                logger.warning(f"Recovery: batch {i + 1} failed after retry, falling back to last batch")
+                recovery_session_id = await self._fallback_to_last_batch(history)
+                if not recovery_session_id:
+                    # 降级也失败 → 放弃恢复，开新会话
+                    await self._notify_recovery_failed()
+                    await self._send_and_stream_impl(text, files)
+                    return
+                accumulated_summary = ""
+                break
+
+        # 恢复完成，发送用户消息（带摘要上下文）
+        if accumulated_summary:
+            recovery_text = (
+                f"[以下是之前对话历史的压缩摘要，请据此理解上下文]\n\n"
+                f"{accumulated_summary}\n\n"
+                f"[用户新消息]\n{text}"
+            )
+        else:
+            recovery_text = text
+
+        # 通知前端恢复完成
+        if self.websocket:
+            try:
+                await self.websocket.send_json({
+                    "type": "recovery_complete",
+                    "content": "上下文恢复完成",
+                })
+            except Exception:
+                pass
+
+        await self._send_and_stream_impl(recovery_text, files)
+
+    async def _send_batch(
+        self, batch: list[dict], session_id: Optional[str],
+        prev_summary: str, is_first: bool
+    ) -> dict:
+        """发送一批历史给 Claude Code 压缩。不流式输出，只拿结果。"""
+        cmd = ["claude", "-p", "--output-format", "stream-json", "--verbose"]
+        cmd.extend(["--permission-mode", self.permission_mode])
+
+        if session_id:
+            cmd.extend(["--resume", session_id])
+
+        prompt = self._build_batch_prompt(batch, prev_summary, is_first)
+
+        process = await asyncio.create_subprocess_exec(
+            *cmd,
+            stdin=asyncio.subprocess.PIPE,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+            cwd=self.workspace,
+            env={**os.environ},
+        )
+        stdout_data, stderr_data = await process.communicate(input=prompt.encode("utf-8"))
+        stderr_text = stderr_data.decode("utf-8", errors="replace")
+        stdout_text = stdout_data.decode("utf-8", errors="replace")
+
+        result = {"session_id": None, "summary": "", "session_lost": False}
+
+        # Check for error result in stdout (Claude Code outputs errors as JSON, not stderr)
+        has_error = False
+        for line in stdout_text.splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                data = json.loads(line)
+                if data.get("type") == "result" and data.get("is_error"):
+                    has_error = True
+                    # Check if it's a session-not-found error
+                    errors = data.get("errors", [])
+                    error_text = " ".join(errors) if errors else ""
+                    if session_id and self._is_session_not_found(error_text):
+                        result["session_lost"] = True
+                        return result
+            except json.JSONDecodeError:
+                pass
+
+        # Also check stderr for session-not-found (older versions may write there)
+        if session_id and self._is_session_not_found(stderr_text):
+            result["session_lost"] = True
+            return result
+
+        if has_error or process.returncode != 0:
+            raise RuntimeError(f"claude exited with code {process.returncode}: {stderr_text[:200]}")
+
+        full_output = ""
+        for line in stdout_data.decode("utf-8", errors="replace").splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                data = json.loads(line)
+                if data.get("type") == "system" and data.get("subtype") == "init":
+                    result["session_id"] = data.get("session_id")
+                if data.get("type") == "assistant":
+                    for block in data.get("message", {}).get("content", []):
+                        if block.get("type") == "text":
+                            full_output += block.get("text", "")
+            except json.JSONDecodeError:
+                pass
+
+        result["summary"] = full_output.strip()
+        return result
+
+    async def _fallback_to_last_batch(self, history: list[dict]) -> Optional[str]:
+        """降级：只压缩最后一批（最近 20 条）。"""
+        last_batch = history[-20:] if len(history) > 20 else history
         try:
-            await self._generate_summary(self.id)
-            self.claude_session_id = None
-            SessionStore.clear_claude_session_id(self.id)
-            logger.info(f"Compaction done for session {self.id}")
+            result = await self._send_batch(last_batch, None, "", is_first=True)
+            if result["session_id"]:
+                self.claude_session_id = result["session_id"]
+                SessionStore.save_claude_session_id(self.id, result["session_id"])
+                logger.info(f"Fallback: session {result['session_id']} saved")
+            return result["session_id"]
         except Exception as e:
-            logger.error(f"Compaction failed for session {self.id}: {e}")
-        finally:
-            self._compacting = False
+            logger.error(f"Fallback failed: {e}")
+            return None
+
+    @staticmethod
+    def _build_batch_prompt(batch: list[dict], prev_summary: str, is_first: bool) -> str:
+        """构建分批压缩的 prompt。"""
+        conv_lines = []
+        for msg in batch:
+            role = "用户" if msg.get("role") == "user" else "助手"
+            content = msg.get("content", "")
+            conv_lines.append(f"{role}: {content}")
+        conv_text = "\n".join(conv_lines)
+
+        if is_first or not prev_summary:
+            return (
+                "请将以下对话记录压缩为结构化摘要，必须包含：\n"
+                "1. 背景与目标\n"
+                "2. 关键结论与决策\n"
+                "3. 具体产物（完整保留 SQL 语句、代码片段、文件路径、配置值，不要省略或改写）\n"
+                "4. 待办与未完成事项\n"
+                "5. 最近要点\n\n"
+                "用中文输出。只输出摘要本身，不要其他废话。\n\n"
+                f"以下是需要压缩的对话记录：\n\n{conv_text}"
+            )
+        else:
+            return (
+                "以下是之前批次的摘要：\n\n"
+                f"{prev_summary}\n\n"
+                "---\n\n"
+                "请将以上摘要与以下新增对话合并压缩，保留关键信息，"
+                "完整保留 SQL、代码、文件路径等技术细节。\n"
+                "用中文输出。只输出合并后的摘要，不要其他废话。\n\n"
+                f"以下是新增对话记录：\n\n{conv_text}"
+            )
+
+    # ─── Recovery notifications ──────────────────────────────────────────
+
+    async def _notify_recovery_start(self):
+        """通知前端正在恢复上下文。"""
+        if self.websocket:
+            try:
+                await self.websocket.send_json({
+                    "type": "recovery_start",
+                    "content": "正在恢复上下文，请稍候...",
+                })
+            except Exception:
+                pass
+
+    async def _notify_recovery_failed(self):
+        """通知前端恢复失败。"""
+        if self.websocket:
+            try:
+                await self.websocket.send_json({
+                    "type": "recovery_failed",
+                    "content": "恢复失败，已开始新会话",
+                })
+            except Exception:
+                pass
 
     async def stop(self):
         if self.process:
@@ -417,7 +641,6 @@ class ClaudeSession:
             try:
                 proc.terminate()
             except ProcessLookupError:
-                # 进程已经死了，不用拍肩
                 return
             try:
                 await asyncio.wait_for(proc.wait(), timeout=5)
@@ -427,92 +650,3 @@ class ClaudeSession:
                 except ProcessLookupError:
                     return
                 await proc.wait()
-
-    @staticmethod
-    async def _generate_summary(session_id: str):
-        """Generate summary for a session using claude CLI.
-
-        截断保护：只取最近 N 条消息（单条超长的掐头留尾），
-        被截掉的老消息靠上一份摘要链式兜底，避免 prompt 随历史无限增长。
-        prompt 走 stdin，规避 Linux 128KB argv 限制 (E2BIG)。
-        """
-        history = SessionStore.read_history(session_id)
-        if not history:
-            return
-
-        cfg = _compaction_cfg()
-        truncated = len(history) > cfg["max_summary_msgs"]
-        recent = history[-cfg["max_summary_msgs"]:]
-
-        half = cfg["max_summary_msg_chars"] // 2
-        conv_lines = []
-        for msg in recent:
-            role = "用户" if msg.get("role") == "user" else "助手"
-            content = msg.get("content", "")
-            if len(content) > cfg["max_summary_msg_chars"]:
-                content = content[:half] + "\n...(中间内容过长已省略)...\n" + content[-half:]
-            conv_lines.append(f"{role}: {content}")
-        conv_text = "\n".join(conv_lines)
-
-        # 链式兜底：老消息被截掉时，把上一份摘要并入，避免截断点之前的信息丢失
-        parts = []
-        if truncated:
-            prev_summary, _ = SessionStore.get_summary(session_id)
-            if prev_summary:
-                parts.append(
-                    "[以下是更早对话的旧摘要，请把其中仍然相关的信息并入新摘要]\n"
-                    f"{prev_summary}\n\n"
-                )
-        parts.append(f"以下是需要压缩的对话记录：\n\n{conv_text}\n\n")
-        # 指令放最后，利用近因效应确保模型按结构输出
-        parts.append(
-            "请将以上对话压缩为结构化摘要，必须包含：\n"
-            "1. 背景与目标：这个会话在做什么\n"
-            "2. 关键结论与决策：已确定的方案、选择及原因\n"
-            "3. 具体产物：完整保留对话中出现的 SQL 语句、代码片段、文件路径、配置值（此部分不要省略、不要改写）\n"
-            "4. 待办与未完成事项\n"
-            "5. 最近 3 轮对话的要点（近期上下文优先级最高）\n\n"
-            "用中文输出。第 3 部分可以较长，其余部分保持简洁。"
-            "只输出摘要本身，不要其他废话，不要以对话口吻开头。"
-        )
-        prompt = "".join(parts)
-
-        workspace = os.getenv("WORKSPACE_DIR", os.path.expanduser("~/workspace"))
-
-        try:
-            # prompt 走 stdin 喂入，argv 只剩命令和选项，不受 128KB 限制
-            process = await asyncio.create_subprocess_exec(
-                "claude", "--bare", "-p", "--output-format", "stream-json", "--verbose",
-                stdin=asyncio.subprocess.PIPE,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-                cwd=workspace,
-                env={**os.environ},
-            )
-            stdout_data, _ = await process.communicate(input=prompt.encode("utf-8"))
-            if process.returncode != 0:
-                raise RuntimeError(f"claude exited with code {process.returncode}")
-
-            full_output = ""
-            for line in stdout_data.decode("utf-8", errors="replace").splitlines():
-                line = line.strip()
-                if not line:
-                    continue
-                try:
-                    data = json.loads(line)
-                    if data.get("type") == "assistant":
-                        content_blocks = data.get("message", {}).get("content", [])
-                        for block in content_blocks:
-                            if block.get("type") == "text":
-                                full_output += block.get("text", "")
-                except json.JSONDecodeError:
-                    pass
-
-            if full_output.strip():
-                import time
-                last_ts = history[-1].get("ts", int(time.time()))
-                SessionStore.update_summary(session_id, full_output.strip(), last_ts)
-                logger.info(f"Summary generated for session {session_id}"
-                            f"{' (truncated to last %d msgs)' % cfg['max_summary_msgs'] if truncated else ''}")
-        except Exception as e:
-            logger.error(f"Failed to generate summary for session {session_id}: {e}")

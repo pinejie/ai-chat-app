@@ -573,6 +573,21 @@ function handleMsg(msg, sid) {
     ctx.isGenerating = false; ctx.streamingText = ''; ctx.streamingThinking = ''; ctx.assistantEl = null;
     return;
   }
+
+  // Recovery status messages
+  if (msg.type === 'recovery_start') {
+    console.log('[WS] recovery_start received, isCurrent:', isCurrent, 'currentCtx:', !!currentCtx);
+    if (isCurrent) addSystemMsg(msg.content || '正在恢复上下文，请稍候...');
+    return;
+  }
+  if (msg.type === 'recovery_complete') {
+    if (isCurrent) addSystemMsg(msg.content || '上下文恢复完成');
+    return;
+  }
+  if (msg.type === 'recovery_failed') {
+    if (isCurrent) addSystemMsg(msg.content || '恢复失败，已开始新会话');
+    return;
+  }
 }
 
 function ensureAssistantBubble() {

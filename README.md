@@ -1,6 +1,6 @@
 # ZD Code
 
-通过 Web 界面使用 Claude Code CLI，支持流式输出、多会话管理、对话持久化、文件上传、跨天记忆、上下文自动压缩、执行追踪、Office 文档预览和主题切换。
+通过 Web 界面使用 Claude Code CLI，支持流式输出、多会话管理、对话持久化、文件上传、跨天记忆、上下文自动恢复、执行追踪、Office 文档预览和主题切换。
 
 ## 功能
 
@@ -8,8 +8,8 @@
 - **多会话并发** — 每个对话独立 WebSocket + 独立 Claude 子进程，互不阻断
 - **会话隔离** — 输入历史、输入框内容、流式状态按会话独立存储，切换对话互不干扰
 - **对话持久化** — 聊天记录以 JSONL 文件存储，服务重启不丢失
-- **跨天记忆** — 优先 `--resume` 恢复短期记忆，失败后自动注入摘要兜底，WebSocket 断开时后台异步生成摘要
-- **上下文自动压缩** — 监控 token 用量和轮次数，超阈值自动摘要并作废旧会话，下条消息开新 session 并注入摘要；支持空闲触发
+- **跨天记忆** — 优先 `--resume` 恢复短期记忆，session 丢失时自动从本地历史分批压缩恢复上下文
+
 - **执行追踪（Trace）** — 实时展示每轮工具调用、LLM 调用、token 消耗，自动检测循环调用和连续错误，完成后可查看完整 span 时间线
 - **标题保护** — 用户手动改名后系统不再自动覆盖，向后兼容旧数据
 - **文件上传** — 支持图片、PDF、文本、代码文件上传，文件路径自动注入 Claude 上下文
@@ -31,7 +31,7 @@ ai-chat-app/
 │   ├── app/
 │   │   ├── main.py            # FastAPI 路由 + 应用初始化
 │   │   ├── session_store.py   # 会话存储、索引管理、Trace 持久化
-│   │   └── claude_session.py  # Claude 会话管理 + 摘要生成 + TraceBuilder
+│   │   └── claude_session.py  # Claude 会话管理 + 历史恢复 + TraceBuilder
 │   ├── .env.example           # 环境变量示例
 │   ├── .env                   # 本地配置（不入 Git）
 │   └── requirements.txt       # Python 依赖
@@ -52,7 +52,7 @@ ai-chat-app/
 │           └── highlight.min.js  # highlight.js 本地打包
 ├── data/                      # 运行时生成（不入 Git）
 │   ├── sessions/
-│   │   ├── index.json         # 对话索引（含摘要 + session_id 持久化）
+│   │   ├── index.json         # 对话索引（含 session_id 持久化）
 │   │   └── {session_id}.jsonl # 每个对话的消息记录
 │   ├── uploads/               # 上传文件存储
 │   ├── preview_cache/         # Office → PDF 转换缓存
@@ -64,33 +64,31 @@ ai-chat-app/
 
 后端桥接 Claude Code CLI，通过子进程调用 `claude -p --output-format stream-json`，将流式输出通过 WebSocket 推送给前端。`TraceBuilder` 从 stream-json 事件中提取工具调用、LLM 调用、token 用量，构建结构化追踪数据。前端为纯静态文件，由后端托管。
 
-## 跨天记忆 + 上下文压缩
+## 跨天记忆 + 历史恢复
 
 ```
 用户发消息
   ↓
-有持久化的 claude_session_id？
+有 claude_session_id？
   ├─ 有 → --resume（短期记忆恢复）
+  │       └─ --resume 失败 → 清空 session_id → 进入恢复流程
   │
-  └─ 没有 → 检查摘要
-              ├─ 有摘要且 generated_at >= 最后消息 ts → 注入摘要到 prompt
-              └─ 没有摘要或摘要过期 → Claude 从零开始
+  └─ 没有 → 检查 JSONL 历史
+              ├─ 有历史 → 进入恢复流程（分批压缩）
+              └─ 无历史 → Claude 从零开始（新对话）
 
-发送后检查上下文：
-  token >= 窗口 × 压缩比例？ 或 轮次 >= 最大轮次？
-    ├─ 是 → 异步生成摘要 → 作废旧 session_id → 下条消息开新会话
-    └─ 否 → 正常
-
-空闲检查（距上条消息超过 idle_minutes）：
-  触发时先同步压缩，再发送新消息
-
-WebSocket 断开时 → 后台异步生成摘要 → 存入 index.json
+恢复流程：
+  从 JSONL 读历史 → 分批（每批20条）
+    ├─ 第1批：调 Claude（新 session）→ 压缩 → 立即保存 session_id
+    ├─ 第2批：调 Claude --resume → 合并压缩
+    ├─ ... 链式累积
+    └─ 最后：注入摘要 + 用户消息 → 流式输出
+  某批失败 → 重试1次 → 仍失败 → 降级只压缩最后一批 → 仍失败 → 放弃
 ```
 
-- **摘要触发**：WebSocket 断开、上下文超阈值、空闲超时
-- **摘要验证**：对比 `summary_generated_at` 与聊天记录最后消息时间戳，过期则重新生成
-- **摘要存储**：`data/sessions/index.json` 的 `summary` 和 `summary_generated_at` 字段
-- **幂等**：摘要已覆盖全部历史时不重复压缩
+- **正常流程**：依赖 Claude Code 自身压缩，ai-chat-app 不干预
+- **恢复流程**：session 丢失时从 JSONL 历史分批压缩恢复
+- **降级策略**：重试 → 只压缩最近20条 → 放弃
 
 ## 快速开始
 
@@ -120,10 +118,6 @@ WebSocket 断开时 → 后台异步生成摘要 → 存入 index.json
 | `WORKSPACE_DIR` | `~/workspace` | Claude Code 工作目录，前端可修改 |
 | `MAX_STORED_SESSIONS` | `50` | 最大存储对话数，超出自动淘汰最老的 |
 | `SESSION_TTL` | `3600` | 无活跃连接的会话超时时间（秒） |
-| `CONTEXT_WINDOW` | `200000` | 模型上下文窗口大小（tokens） |
-| `COMPACTION_RATIO` | `0.4` | 压缩触发比例（窗口 × 比例 = 阈值） |
-| `COMPACTION_MAX_TURNS` | `30` | 轮次兜底：用户消息达到此数量也触发压缩 |
-| `COMPACTION_IDLE_MINUTES` | `30` | 空闲触发：距上条消息超过此时间则先压缩再回复 |
 
 ## API
 

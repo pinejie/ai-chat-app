@@ -93,7 +93,7 @@ class SessionStore:
 
     @classmethod
     def clear_claude_session_id(cls, session_id: str):
-        """Invalidate the Claude-side session (used after context compaction)."""
+        """Invalidate the Claude-side session (used when session is lost or recovery fails)."""
         index = cls.load_index()
         for entry in index:
             if entry["id"] == session_id:
@@ -108,24 +108,6 @@ class SessionStore:
             if entry["id"] == session_id:
                 return entry.get("last_active", 0)
         return 0
-
-    @classmethod
-    def update_summary(cls, session_id: str, summary: str, summary_generated_at: int):
-        index = cls.load_index()
-        for entry in index:
-            if entry["id"] == session_id:
-                entry["summary"] = summary
-                entry["summary_generated_at"] = summary_generated_at
-                break
-        cls.save_index(index)
-
-    @classmethod
-    def get_summary(cls, session_id: str) -> tuple[str | None, int | None]:
-        index = cls.load_index()
-        for entry in index:
-            if entry["id"] == session_id:
-                return entry.get("summary"), entry.get("summary_generated_at")
-        return None, None
 
     @classmethod
     def get_last_message_ts(cls, session_id: str) -> int:
