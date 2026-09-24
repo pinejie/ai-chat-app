@@ -424,7 +424,6 @@ function updateConnectedUI() {
   document.getElementById('statusDot').className = 'status-dot ' + (v ? 'on' : 'off');
   document.getElementById('statusText').textContent = v ? '已连接' : '未连接';
   if (currentCtx) currentCtx.sendBtn.disabled = !v;
-  document.getElementById('reconnectBtn').style.display = v ? 'none' : 'inline-block';
 }
 
 function reconnect() {
