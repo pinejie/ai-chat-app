@@ -396,8 +396,32 @@ def delete_project_file(path: str):
     file_path = _resolve_path(path)
     if not file_path.exists():
         raise HTTPException(404, "File not found")
+    if file_path.is_dir():
+        try:
+            file_path.rmdir()
+        except OSError:
+            raise HTTPException(400, "文件夹不为空，请先清空后再删除")
+        return {"ok": True}
     file_path.unlink()
     return {"ok": True}
+
+
+@app.post("/api/projects/folder")
+def create_project_folder(dir: str = "", body: dict = None):
+    """Create a new folder. dir = parent directory relative to project/ root."""
+    if '..' in dir or '\\' in dir:
+        raise HTTPException(400, "Invalid directory path")
+    name = (body or {}).get("name", "").strip()
+    if not name:
+        raise HTTPException(400, "name is required")
+    if '..' in name or '/' in name or '\\' in name:
+        raise HTTPException(400, "Invalid folder name")
+    target_dir = Path(WORKSPACE_DIR) / "project" / dir if dir else Path(WORKSPACE_DIR) / "project"
+    folder_path = target_dir / name
+    if folder_path.exists():
+        raise HTTPException(409, "Folder already exists")
+    folder_path.mkdir(parents=True, exist_ok=True)
+    return {"ok": True, "name": name}
 
 
 @app.post("/api/projects/content")

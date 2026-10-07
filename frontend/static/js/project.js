@@ -25,6 +25,7 @@ function switchSidebarTab(tab) {
 
 // --- Project Documents ---
 let currentDocPath = '';
+let currentFolder = '';
 
 /**
  * Load the root-level directory listing and render the tree.
@@ -83,6 +84,11 @@ function createFolderNode(dirName, dirRelPath, projectName, depth) {
   let loaded = false;
 
   header.onclick = function() {
+    // 选中文件夹
+    currentFolder = dirRelPath;
+    document.querySelectorAll('.proj-name').forEach(function(x) { x.classList.remove('active'); });
+    this.classList.add('active');
+    // 展开/折叠
     const isOpen = this.classList.toggle('open');
     childrenEl.classList.toggle('open', isOpen);
     if (isOpen && !loaded) {
@@ -577,14 +583,37 @@ function deleteDoc() {
   .catch(err => alert('删除失败: ' + err.message));
 }
 
-function showNewDocModal() {
-  if (!currentDocPath) {
-    alert('请先选择一个文件');
-    return;
+function showNewFolderModal(dirPath) {
+  if (dirPath === undefined) {
+    if (!currentDocPath) { showConfirm('提示', '请先选择一个文件', function(){}); document.getElementById('confirmBtn').style.display = 'none'; return; }
+    var lastSlash2 = currentDocPath.lastIndexOf('/');
+    dirPath = (lastSlash2 >= 0) ? currentDocPath.substring(0, lastSlash2) : '';
   }
-  // Determine the directory for the new file (same directory as current file)
-  const lastSlash = currentDocPath.lastIndexOf('/');
-  const dirPath = (lastSlash >= 0) ? currentDocPath.substring(0, lastSlash) : '';
+  var dirLabel = dirPath || '根目录';
+
+  document.getElementById('modalTitle').textContent = '新建文件夹 - ' + dirLabel;
+  document.getElementById('modalInput').value = '';
+  document.getElementById('modalInput').placeholder = '输入文件夹名（如 03-设计方案）';
+  modalCallback = function(folderName) {
+    fetch(API + '/api/projects/folder?dir=' + encodeURIComponent(dirPath), {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({name: folderName})
+    })
+    .then(function(r) { if(!r.ok) return r.json().then(function(d){ throw new Error(d.detail || 'Create failed'); }); return r.json(); })
+    .then(function() { refreshDir(dirPath); })
+    .catch(function(err) { alert('创建失败: ' + err.message); });
+  };
+  document.getElementById('modalOverlay').classList.add('show');
+  setTimeout(function() { document.getElementById('modalInput').focus(); }, 100);
+}
+
+function showNewDocModal(dirPath) {
+  if (dirPath === undefined) {
+    if (!currentDocPath) { showConfirm('提示', '请先选择一个文件', function(){}); document.getElementById('confirmBtn').style.display = 'none'; return; }
+    var lastSlash2 = currentDocPath.lastIndexOf('/');
+    dirPath = (lastSlash2 >= 0) ? currentDocPath.substring(0, lastSlash2) : '';
+  }
   const dirLabel = dirPath || '根目录';
 
   document.getElementById('modalTitle').textContent = '新建文档 - ' + dirLabel;
@@ -675,3 +704,67 @@ function enableRename(element, sessionId) {
   try { const h = await fetch(API + '/api/health'); const hd = await h.json(); document.getElementById('workspaceDir').textContent = hd.workspace || '-'; } catch {}
   if (list.length > 0) await switchChat(list[0].id); else await newChat();
 })();
+
+// === 项目文档工具栏按钮 ===
+
+function projectNewDoc() {
+  // 在当前选中的文件所在目录新建，或根目录
+  var dirPath = '';
+  if (currentDocPath) {
+    var lastSlash = currentDocPath.lastIndexOf('/');
+    dirPath = (lastSlash >= 0) ? currentDocPath.substring(0, lastSlash) : '';
+  }
+  showNewDocModal(dirPath);
+}
+
+function projectNewFolder() {
+  var dirPath = '';
+  if (currentDocPath) {
+    var lastSlash = currentDocPath.lastIndexOf('/');
+    dirPath = (lastSlash >= 0) ? currentDocPath.substring(0, lastSlash) : '';
+  }
+  showNewFolderModal(dirPath);
+}
+
+function projectDelete() {
+  if (!currentFolder) {
+    showConfirm('提示', '请先选择要删除的文件夹', function(){});
+    // 隐藏确认按钮
+    document.getElementById('confirmBtn').style.display = 'none';
+    return;
+  }
+  document.getElementById('confirmBtn').style.display = '';
+  var folderName = currentFolder.split('/').pop();
+  showConfirm('确认删除', '确定删除文件夹 "' + folderName + '"？文件夹必须为空才能删除。', function() {
+  fetch(API + '/api/projects/content?path=' + encodeURIComponent(currentFolder), { method: 'DELETE' })
+  .then(function(r) { if(!r.ok) return r.json().then(function(d){ throw new Error(d.detail || 'failed'); }); return r.json(); })
+  .then(function() {
+    var folderPath = currentFolder;
+    currentFolder = '';
+    var p = folderPath.lastIndexOf('/');
+    refreshDir(p >= 0 ? folderPath.substring(0, p) : '');
+  })
+  .catch(function(err) { alert('删除失败: ' + err.message); });
+  });
+}
+
+// === 自定义确认弹窗 ===
+var _confirmCallback = null;
+
+function showConfirm(title, message, onConfirm) {
+  document.getElementById('confirmTitle').textContent = title;
+  document.getElementById('confirmMessage').textContent = message;
+  _confirmCallback = onConfirm;
+  document.getElementById('confirmOverlay').classList.add('show');
+}
+
+function closeConfirm() {
+  document.getElementById('confirmOverlay').classList.remove('show');
+  document.getElementById('confirmBtn').style.display = '';
+  _confirmCallback = null;
+}
+
+function confirmAction() {
+  if (_confirmCallback) _confirmCallback();
+  closeConfirm();
+}

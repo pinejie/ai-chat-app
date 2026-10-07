@@ -8,7 +8,7 @@
 <link rel="stylesheet" href="/static/highlight-theme-light.css" id="hljs-light" disabled>
 <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
 <script src="/static/js/highlight.min.js"></script>
-<link rel="stylesheet" href="/static/style.css">
+<link rel="stylesheet" href="/static/style.css?v=1791343359">
 </head>
 <body>
 <div class="sidebar">
@@ -20,6 +20,11 @@
     <button id="newChatBtn" onclick="newChat()">+ 新对话</button>
   </div>
   <div class="chat-list" id="chatList"></div>
+  <div class="project-toolbar">
+    <button class="proj-btn" onclick="projectNewDoc()">+ 新建文档</button>
+    <button class="proj-btn" onclick="projectNewFolder()">+ 新建文件夹</button>
+    <button class="proj-btn danger" onclick="projectDelete()">删除文件夹</button>
+  </div>
   <div class="project-list" id="projectList"></div>
   <div class="sidebar-info">
     <div class="label">状态</div>
@@ -48,8 +53,7 @@
       <button class="doc-btn" id="docFullscreenBtn" onclick="toggleSlideViewer()" style="display:none" title="全屏幻灯片 (↑↓翻页)">&#9974; 全屏</button>
       <button class="doc-btn" id="docDownloadBtn" onclick="downloadDoc()" title="下载文件">&#11015; 下载</button>
       <button class="doc-btn" id="docEditBtn" onclick="editDoc()">编辑</button>
-      <button class="doc-btn" id="docNewBtn" onclick="showNewDocModal()">新建</button>
-      <button class="doc-btn danger" onclick="deleteDoc()">删除</button>
+      <button class="doc-btn danger" onclick="deleteDoc()">删除文件夹</button>
     </div>
   </div>
   <div class="doc-content" id="docContentArea"><div class="doc-content-inner" id="docContentInner"></div></div>
@@ -88,6 +92,16 @@
     </div>
   </div>
 </div>
+<div class="modal-overlay" id="confirmOverlay">
+  <div class="modal-box">
+    <div class="modal-title" id="confirmTitle">确认删除</div>
+    <div class="modal-message" id="confirmMessage" style="padding:0 20px 16px;color:var(--text2);font-size:13px;line-height:1.5"></div>
+    <div class="modal-actions">
+      <button class="cancel-btn" onclick="closeConfirm()">取消</button>
+      <button class="confirm-btn danger" id="confirmBtn" onclick="confirmAction()">确认</button>
+    </div>
+  </div>
+</div>
 <!-- Global file input (shared across sessions) -->
 <input type="file" id="fileInput" multiple style="display:none" onchange="handleFileSelect(event)">
 <script src="/static/js/app.js?v=1789616029"></script>
@@ -96,6 +110,6 @@
 <script src="/static/js/trace.js?v=1789616029"></script>
 <script src="/static/js/upload.js?v=1789616029"></script>
 <script src="/static/js/mode.js?v=1789616029"></script>
-<script src="/static/js/project.js?v=1789616029"></script>
+<script src="/static/js/project.js?v=1791343256"></script>
 </body>
 </html>

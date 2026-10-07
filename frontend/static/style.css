@@ -28,7 +28,7 @@
 
 body{height:100vh;display:flex;background:var(--bg);color:var(--text);font-family:-apple-system,sans-serif;font-size:14px}
 
-.sidebar{width:260px;background:var(--bg2);border-right:1px solid var(--border);display:flex;flex-direction:column}
+.sidebar{width:320px;background:var(--bg2);border-right:1px solid var(--border);display:flex;flex-direction:column}
 .sidebar-header{padding:12px;border-bottom:1px solid var(--border)}
 .sidebar-tabs{display:flex;gap:0;margin-bottom:8px;background:var(--bg3);border-radius:8px;padding:3px;position:relative}
 .sidebar-tab{flex:1;padding:8px 0;border:none;background:transparent;color:var(--text3);font-size:12px;cursor:pointer;transition:all .2s;border-radius:6px;font-weight:500}
@@ -39,7 +39,13 @@ body{height:100vh;display:flex;background:var(--bg);color:var(--text);font-famil
 .proj-name{padding:8px 12px;cursor:pointer;display:flex;align-items:center;gap:6px;font-size:13px;color:var(--text2);font-weight:500;transition:background .15s;border-radius:4px}
 .proj-name .folder-icon{font-size:13px}
 .proj-name:hover{background:var(--bg3)}
+.proj-name.active{background:var(--bg3);border-left:2px solid var(--accent)}
 .proj-name .arrow{font-size:10px;transition:transform .2s;color:var(--text4)}
+.folder-actions{margin-left:auto;display:flex;gap:4px}
+.folder-actions button{background:none;border:none;font-size:13px;color:var(--text4);cursor:pointer;padding:2px 4px;line-height:1;border-radius:3px;transition:color .15s,background .15s}
+.folder-actions .folder-new-btn:hover{color:var(--accent)}
+.folder-actions .folder-newfolder-btn:hover{color:var(--accent)}
+.folder-actions .folder-del-btn:hover{color:var(--danger)}
 .proj-name.open .arrow{transform:rotate(90deg)}
 .proj-files{display:none;padding:0 0 4px 0}
 .proj-files.open{display:block}
@@ -279,3 +285,15 @@ body{height:100vh;display:flex;background:var(--bg);color:var(--text);font-famil
 /* 文档查看：LibreOffice 安装指引 */
 .doc-install-guide{display:flex;flex-direction:column;gap:6px;align-items:flex-start;max-width:360px;margin:0 auto}
 .doc-install-cmd{display:block;width:100%;font-size:12px;font-family:ui-monospace,SFMono-Regular,Consolas,monospace;background:var(--bg3);border:1px solid var(--border);border-radius:4px;padding:6px 10px;color:var(--text);word-break:break-all;user-select:all}
+
+/* 项目文档工具栏 */
+.project-toolbar{padding:10px 12px;display:flex;gap:8px;border-bottom:1px solid var(--bg3);margin-bottom:4px}
+.proj-btn{flex:1;padding:6px 0;font-size:11px;border:none;background:var(--bg3);color:var(--text2);cursor:pointer;border-radius:6px;transition:all .15s;font-weight:500;text-align:center}
+.proj-btn:hover{background:var(--accent);color:#fff}
+.proj-btn.danger{background:var(--bg3);color:var(--danger)}
+.proj-btn.danger:hover{background:var(--danger);color:#fff}
+
+/* 确认弹窗 */
+.modal-message{padding:0 20px 16px;color:var(--text2);font-size:13px;line-height:1.5}
+.confirm-btn.danger{background:var(--danger);color:#fff}
+.confirm-btn.danger:hover{background:#b91c1c}
