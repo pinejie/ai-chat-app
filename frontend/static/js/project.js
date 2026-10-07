@@ -708,44 +708,52 @@ function enableRename(element, sessionId) {
 // === 项目文档工具栏按钮 ===
 
 function projectNewDoc() {
-  // 在当前选中的文件所在目录新建，或根目录
-  var dirPath = '';
-  if (currentDocPath) {
-    var lastSlash = currentDocPath.lastIndexOf('/');
-    dirPath = (lastSlash >= 0) ? currentDocPath.substring(0, lastSlash) : '';
-  }
-  showNewDocModal(dirPath);
+  // 在选中的文件夹下新建，没选文件夹则在根目录新建
+  showNewDocModal(currentFolder || '');
 }
 
 function projectNewFolder() {
-  var dirPath = '';
-  if (currentDocPath) {
-    var lastSlash = currentDocPath.lastIndexOf('/');
-    dirPath = (lastSlash >= 0) ? currentDocPath.substring(0, lastSlash) : '';
-  }
-  showNewFolderModal(dirPath);
+  // 在选中的文件夹下新建，没选文件夹则在根目录新建
+  showNewFolderModal(currentFolder || '');
 }
 
 function projectDelete() {
   if (!currentFolder) {
     showConfirm('提示', '请先选择要删除的文件夹', function(){});
-    // 隐藏确认按钮
     document.getElementById('confirmBtn').style.display = 'none';
     return;
   }
   document.getElementById('confirmBtn').style.display = '';
   var folderName = currentFolder.split('/').pop();
-  showConfirm('确认删除', '确定删除文件夹 "' + folderName + '"？文件夹必须为空才能删除。', function() {
-  fetch(API + '/api/projects/content?path=' + encodeURIComponent(currentFolder), { method: 'DELETE' })
-  .then(function(r) { if(!r.ok) return r.json().then(function(d){ throw new Error(d.detail || 'failed'); }); return r.json(); })
-  .then(function() {
-    var folderPath = currentFolder;
-    currentFolder = '';
-    var p = folderPath.lastIndexOf('/');
-    refreshDir(p >= 0 ? folderPath.substring(0, p) : '');
+  // 先查询文件夹内容
+  fetch(API + '/api/browse?rel_path=' + encodeURIComponent(currentFolder))
+  .then(function(r) { return r.json(); })
+  .then(function(data) {
+    var fileCount = data.files ? data.files.length : 0;
+    var dirCount = data.dirs ? data.dirs.length : 0;
+    var total = fileCount + dirCount;
+    var msg = '';
+    if (total === 0) {
+      msg = '确定删除文件夹 "' + folderName + '"？';
+    } else {
+      var parts = [];
+      if (dirCount > 0) parts.push(dirCount + ' 个子文件夹');
+      if (fileCount > 0) parts.push(fileCount + ' 个文件');
+      msg = '文件夹 "' + folderName + '" 下有' + parts.join('和') + '，确定要全部删除吗？';
+    }
+    showConfirm('确认删除', msg, function() {
+      fetch(API + '/api/projects/content?path=' + encodeURIComponent(currentFolder), { method: 'DELETE' })
+      .then(function(r) { if(!r.ok) return r.json().then(function(d){ throw new Error(d.detail || 'failed'); }); return r.json(); })
+      .then(function() {
+        var folderPath = currentFolder;
+        currentFolder = '';
+        var p = folderPath.lastIndexOf('/');
+        refreshDir(p >= 0 ? folderPath.substring(0, p) : '');
+      })
+      .catch(function(err) { alert('删除失败: ' + err.message); });
+    });
   })
-  .catch(function(err) { alert('删除失败: ' + err.message); });
-  });
+  .catch(function(err) { alert('查询文件夹内容失败: ' + err.message); });
 }
 
 // === 自定义确认弹窗 ===

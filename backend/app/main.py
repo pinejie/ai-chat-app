@@ -397,10 +397,7 @@ def delete_project_file(path: str):
     if not file_path.exists():
         raise HTTPException(404, "File not found")
     if file_path.is_dir():
-        try:
-            file_path.rmdir()
-        except OSError:
-            raise HTTPException(400, "文件夹不为空，请先清空后再删除")
+        shutil.rmtree(file_path)
         return {"ok": True}
     file_path.unlink()
     return {"ok": True}
