@@ -20,6 +20,8 @@ function switchSidebarTab(tab) {
   document.getElementById('chatList').style.display = tab === 'chat' ? '' : 'none';
   document.getElementById('projectList').style.display = tab === 'projects' ? 'block' : 'none';
   document.getElementById('newChatBtn').style.display = tab === 'chat' ? '' : 'none';
+  var toolbar = document.querySelector('.project-toolbar');
+  if (toolbar) toolbar.style.display = tab === 'projects' ? 'flex' : 'none';
   if (tab === 'projects') loadProjects();
 }
 
