@@ -28,10 +28,9 @@ const SESSION_HTML = `
         <div class="input-toolbar">
           <button class="upload-btn" title="上传文件">&#128206;</button>
           <div class="toolbar-spacer"></div>
-          <select class="mode-select" title="切换权限模式">
-            <option value="bypassPermissions">无限制</option>
-          </select>
-          <button class="stop-btn" style="display:none">G</button>
+          <select class="model-select" title="选择模型（同 CLI /model）"><option value="default">默认模型</option></select>
+          <select class="mode-select" title="权限模式"><option value="acceptEdits">自动编辑</option></select>
+          <button class="stop-btn" style="display:none" title="停止生成">&#9632;</button>
           <button class="send-btn" disabled>&#8593;</button>
         </div>
         <div class="file-preview" style="display:none"></div>
@@ -71,6 +70,7 @@ function newSessionCtx(sid) {
     filePreview: q('.file-preview'),
     sendHint: q('.send-hint'),
     modeSelect: q('.mode-select'),
+    modelSelect: q('.model-select'),
     // Streaming state
     streamingText: '',
     streamingThinking: '',
@@ -88,6 +88,7 @@ function newSessionCtx(sid) {
 
   // Wire up per-session event listeners
   _attachSessionListeners(ctx);
+  populateSettingSelects(ctx);
   return ctx;
 }
 
@@ -117,6 +118,13 @@ function _attachSessionListeners(ctx) {
   ctx.inputEl.addEventListener('input', function() {
     this.style.height = 'auto';
     this.style.height = Math.min(this.scrollHeight, 120) + 'px';
+  });
+  // 权限模式 / 模型：改动后立即保存到当前对话
+  ctx.modeSelect.addEventListener('change', function() {
+    saveSessionSetting(ctx, 'mode', this.value);
+  });
+  ctx.modelSelect.addEventListener('change', function() {
+    saveSessionSetting(ctx, 'model', this.value);
   });
   // Upload button → trigger global file input
   ctx.uploadBtn.addEventListener('click', function() {
@@ -191,6 +199,7 @@ function removeCtx(sid) {
 async function loadChatList() {
   const res = await fetch(API + '/api/sessions');
   const list = await res.json();
+  refreshSessionSettings(list);
   renderChatList(list);
   return list;
 }
@@ -347,12 +356,8 @@ async function switchChat(sessionId) {
     })
     .catch(function() {});
 
-  // Update mode select
-  const savedMode = sessionModeMap.get(sessionId);
-  if (savedMode && currentCtx.modeSelect) {
-    currentMode = savedMode;
-    currentCtx.modeSelect.value = currentMode;
-  }
+  // 权限模式 / 模型：来自服务端保存的对话设置
+  applySettingsToCtx(currentCtx);
 
   if (!wsMap.has(sessionId)) { connectWS(); }
   updateConnectedUI();
@@ -366,11 +371,16 @@ function connectWS() {
   const socket = new WebSocket(WS + '/ws/' + currentSessionId);
   wsMap.set(currentSessionId, socket);
   const sid = currentSessionId;
+  // 旧 socket 被 close() 后，其 onclose 是异步触发的，可能晚于新 socket 的 onopen。
+  // 不加此判断会把新连接错误地显示为"未连接"并禁用发送按钮。
+  const isStale = () => wsMap.get(sid) !== socket;
   socket.onopen = () => {
+    if (isStale()) return;
     sessionConnected.set(sid, true);
     if (sid === currentSessionId) updateConnectedUI();
   };
   socket.onclose = () => {
+    if (isStale()) return;
     sessionConnected.set(sid, false);
     if (sid === currentSessionId) updateConnectedUI();
     // If this conversation was generating, check backend for real status
@@ -390,8 +400,8 @@ function connectWS() {
                   finalizeStreaming(true);
                 } else if (ctx.assistantEl && (ctx.streamingText || ctx.streamingThinking)) {
                   var html = '';
-                  if (ctx.streamingThinking) html += '<details open><summary class="thinking-summary">思考过程</summary><div class="thinking-content">' + marked.parse(ctx.streamingThinking) + '</div></details>';
-                  if (ctx.streamingText) html += marked.parse(ctx.streamingText);
+                  if (ctx.streamingThinking) html += '<details open><summary class="thinking-summary">思考过程</summary><div class="thinking-content">' + safeMd(ctx.streamingThinking) + '</div></details>';
+                  if (ctx.streamingText) html += safeMd(ctx.streamingText);
                   ctx.assistantEl.querySelector('.bubble').innerHTML = html;
                 }
                 ctx.isGenerating = false;
@@ -411,6 +421,7 @@ function connectWS() {
     }
   };
   socket.onerror = () => {
+    if (isStale()) return;
     sessionConnected.set(sid, false);
     if (sid === currentSessionId) updateConnectedUI();
   };
@@ -512,20 +523,24 @@ function handleMsg(msg, sid) {
   if (msg.type === 'assistant') {
     const content = msg.message?.content;
     if (!content) return;
-    let st = '', sth = '';
+    // CLI 的 stream-json 是「每个内容块一个 assistant 事件」，所以必须在已有的流式状态上累加，
+    // 不能每次从空字符串重新开始，否则前面的思考/文本会被覆盖丢失。
+    let st = ctx.streamingText || '', sth = ctx.streamingThinking || '';
     for (const block of content) {
       if (block.type === 'thinking') { sth += (block.thinking || block.text || ''); }
-      else if (block.type === 'text') { st += block.text; }
+      else if (block.type === 'text') { st += (block.text || ''); }
       else if (block.type === 'tool_use') {
+        // 工具调用前的文本先定稿成独立气泡，之后的文本开新气泡
         if (isCurrent) {
           streamingText = st; streamingThinking = sth;
           ctx.streamingText = st; ctx.streamingThinking = sth;
           finalizeStreaming(false);
           addToolMsg(block.name, block.input ? JSON.stringify(block.input, null, 2) : '');
         }
+        st = ''; sth = '';
       }
       else if (block.type === 'tool_result') {
-        if (isCurrent) addToolMsg('result', block.content || '');
+        if (isCurrent) addToolMsg('result', typeof block.content === 'string' ? block.content : JSON.stringify(block.content || ''));
       }
     }
     ctx.streamingText = st;
@@ -543,8 +558,8 @@ function handleMsg(msg, sid) {
     else {
       if (ctx.streamingText || ctx.streamingThinking) {
         let html = '';
-        if (ctx.streamingThinking) html += '<details open><summary class="thinking-summary">思考过程</summary><div class="thinking-content">' + marked.parse(ctx.streamingThinking) + '</div></details>';
-        html += marked.parse(ctx.streamingText);
+        if (ctx.streamingThinking) html += '<details open><summary class="thinking-summary">思考过程</summary><div class="thinking-content">' + safeMd(ctx.streamingThinking) + '</div></details>';
+        html += safeMd(ctx.streamingText);
         // If streaming bubble exists in DOM, update it with final content
         if (ctx.assistantEl) {
           ctx.assistantEl.querySelector('.bubble').innerHTML = html;
@@ -605,8 +620,8 @@ function updateStreamingBubble() {
   if (!currentCtx) return;
   ensureAssistantBubble();
   let html = '';
-  if (streamingThinking) html += '<details open><summary class="thinking-summary">思考中...</summary><div class="thinking-content">' + marked.parse(streamingThinking) + '</div></details>';
-  if (streamingText) html += marked.parse(streamingText);
+  if (streamingThinking) html += '<details open><summary class="thinking-summary">思考中...</summary><div class="thinking-content">' + safeMd(streamingThinking) + '</div></details>';
+  if (streamingText) html += safeMd(streamingText);
   if (!streamingText && !streamingThinking) html = '<span class="typing">思考中<span class="dot">.</span><span class="dot">.</span><span class="dot">.</span></span>';
   currentAssistantEl.querySelector('.bubble').innerHTML = html;
   scrollBottom();
@@ -616,8 +631,8 @@ function finalizeStreaming(save) {
   const hasContent = streamingText || streamingThinking;
   if (save && currentCtx && hasContent) {
     let html = '';
-    if (streamingThinking) html += '<details open><summary class="thinking-summary">思考过程</summary><div class="thinking-content">' + marked.parse(streamingThinking) + '</div></details>';
-    html += marked.parse(streamingText);
+    if (streamingThinking) html += '<details open><summary class="thinking-summary">思考过程</summary><div class="thinking-content">' + safeMd(streamingThinking) + '</div></details>';
+    html += safeMd(streamingText);
     currentCtx.finalAssistantHtml = html;
   }
   if (!currentAssistantEl || !hasContent) {
@@ -626,8 +641,8 @@ function finalizeStreaming(save) {
     return;
   }
   let html = '';
-  if (streamingThinking) html += '<details open><summary class="thinking-summary">思考过程</summary><div class="thinking-content">' + marked.parse(streamingThinking) + '</div></details>';
-  html += marked.parse(streamingText);
+  if (streamingThinking) html += '<details open><summary class="thinking-summary">思考过程</summary><div class="thinking-content">' + safeMd(streamingThinking) + '</div></details>';
+  html += safeMd(streamingText);
   currentAssistantEl.querySelector('.bubble').innerHTML = html;
   currentAssistantEl = null; streamingText = ''; streamingThinking = '';
   if (currentCtx) currentCtx.assistantEl = null;
@@ -644,7 +659,7 @@ function addUserMsg(text) {
 function addAssistantMsg(text) {
   if (!currentCtx) return;
   const el = document.createElement('div'); el.className = 'msg msg-assistant';
-  el.innerHTML = '<div class="bubble">' + marked.parse(text) + '</div>';
+  el.innerHTML = '<div class="bubble">' + safeMd(text) + '</div>';
   currentCtx.messagesInner.appendChild(el);
 }
 function addToolMsg(name, content) {

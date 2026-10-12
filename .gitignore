@@ -4,3 +4,4 @@ data/
 .env
 backend/.pid
 backend/uvicorn.log
+.venv/

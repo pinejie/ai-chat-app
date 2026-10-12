@@ -3,6 +3,7 @@ import asyncio
 import json
 import logging
 import os
+import re
 import time
 from collections import defaultdict
 from typing import Optional
@@ -61,19 +62,9 @@ class TraceBuilder:
                     events.append({**span, "event": "tool_start"})
 
                 elif btype == "tool_result":
-                    tool_id = block.get("tool_use_id", "")
-                    is_error = block.get("is_error", False)
-                    result_content = block.get("content", "")
-                    if tool_id in self._pending_tools:
-                        span = self._pending_tools.pop(tool_id)
-                        span["end"] = time.time()
-                        span["status"] = "error" if is_error else "success"
-                        span["duration"] = round(span["end"] - span["start"], 2)
-                        if is_error:
-                            span["error"] = str(result_content)[:300]
-                        span["output_summary"] = str(result_content)[:200]
-                        self.spans.append(span)
-                        events.append({**span, "event": "tool_end"})
+                    ev = self._finish_tool(block)
+                    if ev:
+                        events.append(ev)
 
             if usage and usage.get("input_tokens", 0) > 0:
                 self._llm_step += 1
@@ -90,10 +81,38 @@ class TraceBuilder:
 
             return {"type": "trace", "events": events} if events else None
 
+        # 工具结果在 CLI 的 stream-json 中是 type=user 事件里的 tool_result 块（已用真实输出验证），
+        # 只看 assistant 事件会导致所有工具 span 永远无法完成
+        if msg_type == "user":
+            events = []
+            content = msg.get("content", []) if isinstance(msg.get("content"), list) else []
+            for block in content:
+                if isinstance(block, dict) and block.get("type") == "tool_result":
+                    ev = self._finish_tool(block)
+                    if ev:
+                        events.append(ev)
+            return {"type": "trace", "events": events} if events else None
+
         if msg_type == "result":
             return self._build_final_trace()
 
         return None
+
+    def _finish_tool(self, block: dict) -> dict | None:
+        """Close the pending tool span matching a tool_result block."""
+        tool_id = block.get("tool_use_id", "")
+        if tool_id not in self._pending_tools:
+            return None
+        span = self._pending_tools.pop(tool_id)
+        text = _result_text(block.get("content", ""))
+        span["end"] = time.time()
+        span["status"] = "error" if block.get("is_error", False) else "success"
+        span["duration"] = round(span["end"] - span["start"], 2)
+        if span["status"] == "error":
+            span["error"] = text[:300]
+        span["output_summary"] = text[:200]
+        self.spans.append(span)
+        return {**span, "event": "tool_end"}
 
     def detect_issues(self) -> list[str]:
         """Detect potential problems in the trace."""
@@ -157,6 +176,16 @@ class TraceBuilder:
         }
 
 
+def _result_text(content) -> str:
+    """tool_result.content 可能是字符串，也可能是 [{type:text,text:...}] 数组。"""
+    if isinstance(content, list):
+        return "\n".join(
+            b.get("text", "") for b in content
+            if isinstance(b, dict) and b.get("type") == "text"
+        )
+    return str(content or "")
+
+
 def _summarize_input(tool_name: str, tool_input: dict) -> str:
     """Create a short summary of tool input for display."""
     if tool_name == "Bash":
@@ -181,18 +210,45 @@ class ClaudeSession:
       → 失败重试 → 再失败只压缩最后一批 → 再失败放弃
     """
 
+    # 与 `claude --permission-mode` 接受的取值一一对应（已用 CLI 实测验证）
     AVAILABLE_MODES = [
-        {"id": "default", "name": "默认", "description": "每次工具调用都询问权限"},
-        {"id": "acceptEdits", "name": "自动编辑", "description": "自动接受编辑，其他仍询问"},
-        {"id": "plan", "name": "计划模式", "description": "只分析规划，不执行操作"},
-        {"id": "auto", "name": "自动模式", "description": "自动处理大部分操作"},
+        {"id": "default", "name": "默认", "description": "CLI 默认权限规则，工具调用按规则确认"},
+        {"id": "manual", "name": "manual", "description": "CLI 的 manual 模式（取值与 CLI 一致）"},
+        {"id": "acceptEdits", "name": "自动编辑", "description": "自动接受文件编辑，其他操作仍按规则确认"},
+        {"id": "auto", "name": "自动", "description": "由 CLI 自动判断是否需要确认"},
+        {"id": "dontAsk", "name": "不询问", "description": "不弹出确认，未预先允许的操作直接拒绝"},
+        {"id": "plan", "name": "计划模式", "description": "只分析和规划，不执行修改"},
         {"id": "bypassPermissions", "name": "无限制", "description": "跳过所有权限检查"},
     ]
+    DEFAULT_MODE = "acceptEdits"
+    # 模型：default 表示不传 --model，由 CLI 决定；其余为 CLI 认识的别名或完整模型名
+    MODEL_ALIASES = ["sonnet", "opus", "haiku", "fable"]
+    _MODEL_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._\-\[\]]{0,99}$")
 
-    def __init__(self, session_id: str, workspace: str, permission_mode: str = "bypassPermissions"):
+    @classmethod
+    def valid_mode(cls, mode: str) -> bool:
+        return mode in {m["id"] for m in cls.AVAILABLE_MODES}
+
+    @classmethod
+    def valid_model(cls, model: str) -> bool:
+        return model == "default" or bool(cls._MODEL_RE.match(model or ""))
+
+    @classmethod
+    def model_options(cls) -> list[str]:
+        """下拉框选项：默认 + 别名 + .env 里 CLAUDE_MODEL_OPTIONS 指定的完整模型名（逗号分隔）。"""
+        extra = [m.strip() for m in os.getenv("CLAUDE_MODEL_OPTIONS", "").split(",") if m.strip()]
+        out = ["default"] + cls.MODEL_ALIASES
+        for m in extra:
+            if m not in out and cls.valid_model(m):
+                out.append(m)
+        return out
+
+    def __init__(self, session_id: str, workspace: str):
         self.id = session_id
         self.workspace = workspace
-        self.permission_mode = permission_mode
+        saved = SessionStore.get_settings(session_id)
+        self.permission_mode = saved.get("permission_mode", self.DEFAULT_MODE)
+        self.model = saved.get("model", "default")
         self.claude_session_id: Optional[str] = SessionStore.load_claude_session_id(session_id)
         self.websocket: Optional[WebSocket] = None
         self.process: Optional[asyncio.subprocess.Process] = None
@@ -238,6 +294,8 @@ class ClaudeSession:
         ]
 
         cmd.extend(["--permission-mode", self.permission_mode])
+        if self.model and self.model != "default":
+            cmd.extend(["--model", self.model])
 
         if self.claude_session_id:
             cmd.extend(["--resume", self.claude_session_id])
@@ -262,6 +320,8 @@ class ClaudeSession:
         self._last_error_text = ""
 
         # prompt 走 stdin，避免超长消息触发 Linux 128KB argv 限制 (E2BIG)
+        # limit: asyncio 默认单行上限 64KB，stream-json 单行（如大文件 Read 结果）会超过，
+        # 导致 readline 抛 ValueError 并中断整轮输出，所以放宽到 64MB
         process = await asyncio.create_subprocess_exec(
             *cmd,
             stdin=asyncio.subprocess.PIPE,
@@ -269,6 +329,7 @@ class ClaudeSession:
             stderr=asyncio.subprocess.PIPE,
             cwd=self.workspace,
             env={**os.environ},
+            limit=64 * 1024 * 1024,
         )
         self.process = process
 
@@ -346,15 +407,11 @@ class ClaudeSession:
 
                 # Build trace from stream events
                 trace_event = self.trace.process_event(data)
-                if trace_event and self.websocket:
-                    try:
-                        await self.websocket.send_json(trace_event)
-                    except Exception:
-                        pass
+                if trace_event:
+                    await self._safe_send(trace_event)
 
-                if self.websocket:
-                    await self.websocket.send_json(data)
-                    self.touch()
+                await self._safe_send(data)
+                self.touch()
                 if data.get("type") == "assistant":
                     content = data.get("message", {}).get("content", [])
                     for block in content:
@@ -373,17 +430,22 @@ class ClaudeSession:
                     SessionStore.save_trace(self.id, self.trace)
                     # Send final trace summary
                     final = self.trace._build_final_trace()
-                    if self.websocket:
-                        try:
-                            await self.websocket.send_json(final)
-                        except Exception:
-                            pass
+                    await self._safe_send(final)
             except json.JSONDecodeError:
-                if self.websocket:
-                    try:
-                        await self.websocket.send_json({"type": "raw", "content": line.decode().strip()})
-                    except Exception:
-                        pass
+                await self._safe_send({"type": "raw", "content": line.decode().strip()})
+
+    async def _safe_send(self, payload: dict) -> bool:
+        """Send to the WebSocket if one is attached. Failures (client gone) are logged, never raised:
+        the stdout reader must keep draining the process and persisting the reply."""
+        ws = self.websocket
+        if ws is None:
+            return False
+        try:
+            await ws.send_json(payload)
+            return True
+        except Exception as e:
+            logger.info("WebSocket send failed, continuing to drain claude output: %s", e)
+            return False
 
     async def _read_stderr(self, process):
         if not process.stderr:
@@ -498,6 +560,8 @@ class ClaudeSession:
         """发送一批历史给 Claude Code 压缩。不流式输出，只拿结果。"""
         cmd = ["claude", "-p", "--output-format", "stream-json", "--verbose"]
         cmd.extend(["--permission-mode", self.permission_mode])
+        if self.model and self.model != "default":
+            cmd.extend(["--model", self.model])
 
         if session_id:
             cmd.extend(["--resume", session_id])

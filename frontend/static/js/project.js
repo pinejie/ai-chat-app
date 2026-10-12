@@ -294,7 +294,7 @@ async function renderDocContent(data) {
     }
     setPreviewBtn(true);
   } else if (/\.md$/i.test(data.filename)) {
-    inner.innerHTML = '<div class="bubble">' + marked.parse(data.content) + '</div>';
+    inner.innerHTML = '<div class="bubble">' + safeMd(data.content) + '</div>';
   } else {
     var lang = detectCodeLang(data.filename);
     var cls = lang ? ' class="language-' + lang + '"' : '';
@@ -338,6 +338,8 @@ async function openDocView(docPath) {
   const filename = docPath.split('/').pop();
   const dirPath = docPath.includes('/') ? docPath.substring(0, docPath.lastIndexOf('/')) : '';
   document.getElementById('docContentArea').classList.remove('previewing');
+  // editDoc() 会把内容区隐藏，这里必须恢复，否则保存/切换文档后页面空白
+  document.getElementById('docContentArea').style.display = '';
   document.getElementById('docEditArea').style.display = 'none';
   document.getElementById('docTitle').textContent = docPath;
   // 图片/二进制文件不能文本编辑，隐藏编辑按钮
@@ -701,6 +703,7 @@ function enableRename(element, sessionId) {
 
 // --- Init (must be last since it calls functions from all modules) ---
 (async function init() {
+  await ensureLogin();
   await loadModes();
   const list = await loadChatList();
   try { const h = await fetch(API + '/api/health'); const hd = await h.json(); document.getElementById('workspaceDir').textContent = hd.workspace || '-'; } catch {}

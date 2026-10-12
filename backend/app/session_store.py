@@ -102,6 +102,29 @@ class SessionStore:
         cls.save_index(index)
 
     @classmethod
+    def get_settings(cls, session_id: str) -> dict:
+        """按对话保存的设置（权限模式、模型）。缺失时返回空字典，由调用方使用默认值。"""
+        for entry in cls.load_index():
+            if entry["id"] == session_id:
+                return {k: entry[k] for k in ("permission_mode", "model") if k in entry}
+        return {}
+
+    @classmethod
+    def update_settings(cls, session_id: str, **values) -> bool:
+        """更新对话设置。值为 None 的字段会被删除（表示使用默认值）。返回是否找到该对话。"""
+        index = cls.load_index()
+        for entry in index:
+            if entry["id"] == session_id:
+                for k, v in values.items():
+                    if v is None:
+                        entry.pop(k, None)
+                    else:
+                        entry[k] = v
+                cls.save_index(index)
+                return True
+        return False
+
+    @classmethod
     def get_last_active(cls, session_id: str) -> int:
         index = cls.load_index()
         for entry in index:

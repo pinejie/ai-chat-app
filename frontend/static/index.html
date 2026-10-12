@@ -8,7 +8,8 @@
 <link rel="stylesheet" href="/static/highlight-theme-light.css" id="hljs-light" disabled>
 <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
 <script src="/static/js/highlight.min.js"></script>
-<link rel="stylesheet" href="/static/style.css?v=1791348982">
+<script src="/static/js/purify.min.js?v=1791788789"></script>
+<link rel="stylesheet" href="/static/style.css?v=1791788789">
 </head>
 <body>
 <div class="sidebar">
@@ -102,14 +103,23 @@
     </div>
   </div>
 </div>
+<div class="modal-overlay" id="loginOverlay">
+  <div class="modal-box login-box">
+    <div class="login-brand">ZD Code</div>
+    <div class="login-hint">请输入访问口令</div>
+    <input type="password" class="modal-input" id="loginInput" placeholder="访问口令" autocomplete="current-password">
+    <div class="login-error" id="loginError"></div>
+    <div class="modal-actions"><button class="confirm-btn" id="loginBtn">进入</button></div>
+  </div>
+</div>
 <!-- Global file input (shared across sessions) -->
 <input type="file" id="fileInput" multiple style="display:none" onchange="handleFileSelect(event)">
-<script src="/static/js/app.js?v=1789616029"></script>
-<script src="/static/js/theme.js?v=1789616029"></script>
-<script src="/static/js/chat.js?v=1789616029"></script>
-<script src="/static/js/trace.js?v=1789616029"></script>
-<script src="/static/js/upload.js?v=1789616029"></script>
-<script src="/static/js/mode.js?v=1789616029"></script>
-<script src="/static/js/project.js?v=1791349647"></script>
+<script src="/static/js/app.js?v=1791788789"></script>
+<script src="/static/js/theme.js?v=1791788789"></script>
+<script src="/static/js/chat.js?v=1791788789"></script>
+<script src="/static/js/trace.js?v=1791788789"></script>
+<script src="/static/js/upload.js?v=1791788789"></script>
+<script src="/static/js/mode.js?v=1791788789"></script>
+<script src="/static/js/project.js?v=1791788789"></script>
 </body>
 </html>

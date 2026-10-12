@@ -1,5 +1,7 @@
 """Claude Code Web Bridge - FastAPI Application."""
 import asyncio
+import hmac
+import logging
 import mimetypes
 import os
 import shutil
@@ -10,9 +12,8 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 
 from dotenv import load_dotenv
-from fastapi import FastAPI, File, HTTPException, UploadFile, WebSocket, WebSocketDisconnect
-from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
+from fastapi import FastAPI, File, HTTPException, Request, Response, UploadFile, WebSocket, WebSocketDisconnect
+from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from app.claude_session import ClaudeSession
@@ -23,6 +24,10 @@ from app.session_store import SessionStore
 load_dotenv(Path(__file__).resolve().parent.parent / '.env')
 
 WORKSPACE_DIR = os.getenv("WORKSPACE_DIR", os.path.expanduser("~/workspace"))
+APP_TOKEN = os.getenv("APP_TOKEN", "")  # 访问口令，必填
+AUTH_COOKIE = "zd_auth"
+# 未登录也能访问的 API（其余 /api/* 与 /ws/* 都需要口令）
+PUBLIC_API_PATHS = {"/api/auth/status", "/api/auth/login", "/api/auth/logout"}
 ENV_PATH = Path(__file__).resolve().parent.parent / '.env'
 PROJECT_DIR = Path(__file__).resolve().parent.parent.parent
 STATIC_DIR = PROJECT_DIR / "frontend" / "static"
@@ -57,6 +62,8 @@ async def _cleanup_expired_sessions():
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    if not APP_TOKEN:
+        raise RuntimeError("APP_TOKEN 未设置：请在 backend/.env 中配置访问口令后再启动")
     _ensure_data_dir()
     SessionStore._set_data_dir(DATA_DIR)
     task = asyncio.create_task(_cleanup_expired_sessions())
@@ -70,15 +77,49 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="Claude Code Web Bridge", version="0.3.0", lifespan=lifespan)
 
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+# 前后端同源，不需要 CORS。之前的 allow_origins=["*"] + credentials 已移除。
 
 app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
+
+
+def _is_authed(token_value) -> bool:
+    if not APP_TOKEN or not token_value:
+        return False
+    return hmac.compare_digest(str(token_value).encode("utf-8"), APP_TOKEN.encode("utf-8"))
+
+
+@app.middleware("http")
+async def require_auth(request: Request, call_next):
+    path = request.url.path
+    if path.startswith("/api/") and path not in PUBLIC_API_PATHS:
+        if not _is_authed(request.cookies.get(AUTH_COOKIE)):
+            return JSONResponse({"detail": "unauthorized"}, status_code=401)
+    return await call_next(request)
+
+
+# ─── Routes: Auth ─────────────────────────────────────────────────────────────
+
+@app.get("/api/auth/status")
+def auth_status(request: Request):
+    return {"authenticated": _is_authed(request.cookies.get(AUTH_COOKIE))}
+
+
+@app.post("/api/auth/login")
+def auth_login(body: dict, response: Response):
+    token = str(body.get("token", "")).strip()
+    if not _is_authed(token):
+        raise HTTPException(401, "口令错误")
+    # HttpOnly：页面脚本读不到 cookie，即使有 XSS 也偷不走口令
+    # SameSite=Strict：跨站页面无法带上 cookie，防 CSRF
+    response.set_cookie(AUTH_COOKIE, token, httponly=True, samesite="strict",
+                        max_age=30 * 24 * 3600, path="/")
+    return {"ok": True}
+
+
+@app.post("/api/auth/logout")
+def auth_logout(response: Response):
+    response.delete_cookie(AUTH_COOKIE, path="/")
+    return {"ok": True}
 
 
 # ─── Routes: Core ─────────────────────────────────────────────────────────────
@@ -217,17 +258,37 @@ def get_session_trace(session_id: str):
     return {"live": False, "spans": [], "issues": []}
 
 
+@app.get("/api/models")
+def get_models():
+    return {"default": "default", "options": ClaudeSession.model_options()}
+
+
+def _apply_session_setting(session_id: str, **values):
+    """持久化到对话索引（不要求会话已加载进内存），并同步到内存中的活跃会话。"""
+    if not SessionStore.update_settings(session_id, **values):
+        raise HTTPException(404, "Session not found")
+    live = sessions.get(session_id)
+    if live:
+        for k, v in values.items():
+            setattr(live, k, v)
+
+
 @app.post("/api/sessions/{session_id}/mode")
 def set_session_mode(session_id: str, body: dict):
-    session = sessions.get(session_id)
-    if not session:
-        raise HTTPException(404, "Session not found")
-    mode = body.get("mode", "").strip()
-    valid_ids = [m["id"] for m in ClaudeSession.AVAILABLE_MODES]
-    if mode not in valid_ids:
-        raise HTTPException(400, f"Invalid mode. Valid: {valid_ids}")
-    session.permission_mode = mode
+    mode = str(body.get("mode", "")).strip()
+    if not ClaudeSession.valid_mode(mode):
+        raise HTTPException(400, "Invalid permission mode")
+    _apply_session_setting(session_id, permission_mode=mode)
     return {"mode": mode}
+
+
+@app.post("/api/sessions/{session_id}/model")
+def set_session_model(session_id: str, body: dict):
+    model = str(body.get("model", "")).strip() or "default"
+    if not ClaudeSession.valid_model(model):
+        raise HTTPException(400, "Invalid model name")
+    _apply_session_setting(session_id, model=model)
+    return {"model": model}
 
 
 @app.put("/api/sessions/{session_id}/title")
@@ -249,6 +310,9 @@ def rename_session(session_id: str, body: dict):
 
 @app.websocket("/ws/{session_id}")
 async def websocket_endpoint(websocket: WebSocket, session_id: str):
+    if not _is_authed(websocket.cookies.get(AUTH_COOKIE)):
+        await websocket.close(code=1008)  # policy violation
+        return
     await websocket.accept()
     if session_id not in sessions:
         sessions[session_id] = ClaudeSession(session_id, WORKSPACE_DIR)
@@ -308,6 +372,20 @@ def _resolve_path(path: str) -> Path:
     except ValueError:
         raise HTTPException(400, "Invalid path")
     return file_path
+
+def _resolve_dir(dir: str) -> Path:
+    """Resolve a parent directory (relative to project/) and ensure it stays inside project/.
+    注意：Path 的 `/` 遇到绝对路径会直接替换前缀，必须 resolve 后再校验。"""
+    if '..' in dir or '\\' in dir:
+        raise HTTPException(400, "Invalid directory path")
+    project_root = Path(WORKSPACE_DIR) / "project"
+    target_dir = (project_root / dir) if dir else project_root
+    try:
+        target_dir.resolve().relative_to(project_root.resolve())
+    except ValueError:
+        raise HTTPException(400, "Invalid directory path")
+    return target_dir
+
 
 @app.get("/api/browse")
 def browse_directory(rel_path: str = ""):
@@ -394,6 +472,9 @@ def update_project_file(path: str, body: dict):
 @app.delete("/api/projects/content")
 def delete_project_file(path: str):
     file_path = _resolve_path(path)
+    # 防止 path="" 或 "." 时 rmtree 整个 project/ 根目录
+    if file_path.resolve() == (Path(WORKSPACE_DIR) / "project").resolve():
+        raise HTTPException(400, "Cannot delete project root")
     if not file_path.exists():
         raise HTTPException(404, "File not found")
     if file_path.is_dir():
@@ -413,7 +494,7 @@ def create_project_folder(dir: str = "", body: dict = None):
         raise HTTPException(400, "name is required")
     if '..' in name or '/' in name or '\\' in name:
         raise HTTPException(400, "Invalid folder name")
-    target_dir = Path(WORKSPACE_DIR) / "project" / dir if dir else Path(WORKSPACE_DIR) / "project"
+    target_dir = _resolve_dir(dir)
     folder_path = target_dir / name
     if folder_path.exists():
         raise HTTPException(409, "Folder already exists")
@@ -424,8 +505,6 @@ def create_project_folder(dir: str = "", body: dict = None):
 @app.post("/api/projects/content")
 def create_project_file(dir: str = "", body: dict = None):
     """Create a new file. dir = relative directory path from project/ root."""
-    if '..' in dir or '\\' in dir:
-        raise HTTPException(400, "Invalid directory path")
     filename = (body or {}).get("filename", "").strip()
     content_text = (body or {}).get("content", "")
     if not filename:
@@ -434,7 +513,7 @@ def create_project_file(dir: str = "", body: dict = None):
         raise HTTPException(400, "Invalid filename")
     if not filename.endswith('.md'):
         filename += '.md'
-    target_dir = Path(WORKSPACE_DIR) / "project" / dir if dir else Path(WORKSPACE_DIR) / "project"
+    target_dir = _resolve_dir(dir)
     target_dir.mkdir(parents=True, exist_ok=True)
     file_path = target_dir / filename
     if file_path.exists():

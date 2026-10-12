@@ -93,6 +93,13 @@ async function sendMessage() {
     renderFilePreview();
   }
 
+  // 上传是异步的，等待期间连接可能已断开。此时若继续，界面会进入"生成中"但消息根本没发出去。
+  const wsNow = wsMap.get(currentSessionId);
+  if (!wsNow || wsNow.readyState !== WebSocket.OPEN) {
+    addSystemMsg('连接已断开，消息未发送，请重连后重试');
+    return;
+  }
+
   messageHistory.push(text); historyIndex = -1; tempInput = '';
   input.value = '';
   input.style.height = 'auto';
