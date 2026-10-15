@@ -84,6 +84,8 @@ function newSessionCtx(sid) {
     tracePanelOpen: false,
     // History loaded flag
     historyLoaded: false,
+    // Pending scroll-to-bottom frame id
+    scrollRaf: 0,
   };
 
   // Wire up per-session event listeners
@@ -654,7 +656,7 @@ function addUserMsg(text) {
   if (!currentCtx) return;
   const el = document.createElement('div'); el.className = 'msg msg-user';
   el.innerHTML = '<div class="bubble">' + escapeHtml(text) + '</div>';
-  currentCtx.messagesInner.appendChild(el); scrollBottom(true);
+  currentCtx.messagesInner.appendChild(el); scrollBottom();
 }
 function addAssistantMsg(text) {
   if (!currentCtx) return;

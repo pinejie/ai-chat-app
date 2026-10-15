@@ -92,12 +92,17 @@ async function editWorkspace() {
 }
 
 // scrollBottom — scoped to currentCtx
-function scrollBottom(force) {
-  if (!currentCtx || !currentCtx.messagesEl) return;
-  const el = currentCtx.messagesEl;
-  if (force === true) { el.scrollTop = el.scrollHeight; return; }
-  const isNearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
-  if (isNearBottom) el.scrollTop = el.scrollHeight;
+// Called whenever new content is added to the message list: jump to the newest content.
+// Coalesced per animation frame so frequent streaming updates stay smooth.
+function scrollBottom() {
+  const ctx = currentCtx;
+  if (!ctx || !ctx.messagesEl) return;
+  if (ctx.scrollRaf) return;
+  ctx.scrollRaf = requestAnimationFrame(function() {
+    ctx.scrollRaf = 0;
+    const el = ctx.messagesEl;
+    el.scrollTop = el.scrollHeight;
+  });
 }
 
 function escapeHtml(s) { return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
