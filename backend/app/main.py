@@ -105,14 +105,16 @@ def auth_status(request: Request):
 
 
 @app.post("/api/auth/login")
-def auth_login(body: dict, response: Response):
+def auth_login(request: Request, body: dict, response: Response):
     token = str(body.get("token", "")).strip()
     if not _is_authed(token):
         raise HTTPException(401, "口令错误")
     # HttpOnly：页面脚本读不到 cookie，即使有 XSS 也偷不走口令
     # SameSite=Strict：跨站页面无法带上 cookie，防 CSRF
+    # Secure 跟随真实协议（uvicorn --proxy-headers 还原 X-Forwarded-Proto）：HTTPS 自动带上，HTTP 自动不带，不硬编码
     response.set_cookie(AUTH_COOKIE, token, httponly=True, samesite="strict",
-                        max_age=30 * 24 * 3600, path="/")
+                        max_age=30 * 24 * 3600, path="/",
+                        secure=(request.scope.get("scheme") == "https"))
     return {"ok": True}
 
 
