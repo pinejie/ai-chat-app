@@ -1,0 +1,156 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="dark">
+<head>
+<meta charset="UTF-8">
+<!-- viewport-fit=cover 是 R2 安全区适配的前提，缺了它 env(safe-area-inset-*) 恒为 0 -->
+<!-- 不设 maximum-scale：允许系统缩放，无障碍要求（需求文档 §6） -->
+<meta name="viewport" content="width=device-width,initial-scale=1.0,viewport-fit=cover">
+<meta name="theme-color" content="#0a0a0f">
+<title>ZD Code</title>
+<!-- 移动端独立样式（§3.1 D1）；设计令牌取值沿用 PC，保证「同一个工具」的识别（§6） -->
+<link rel="stylesheet" href="style.css">
+<!-- 第三方库不复制，引用 /static 下的本地打包件（§3.1 缓解措施） -->
+<link rel="stylesheet" href="/static/highlight-theme-dark.css" id="hljsTheme">
+</head>
+<body>
+
+<!-- 登录遮罩。/m 是静态页、不受 require_auth 保护，
+     因此进页面须探测 /api/auth/status（§9 R-1 容错：最坏是多输一次口令，不能白屏） -->
+<div id="loginOverlay" class="login-overlay hidden">
+  <div class="login-card">
+    <div class="login-brand">ZD Code</div>
+    <p class="login-hint">输入访问口令</p>
+    <input id="tokenInput" class="login-input" type="password"
+           autocomplete="off" autocapitalize="off" spellcheck="false"
+           enterkeyhint="go" aria-label="访问口令">
+    <div class="login-row">
+      <button id="btnTogglePw" class="link-btn" type="button" aria-label="显示口令">显示</button>
+      <button id="btnLogin" class="btn-primary" type="button">进入</button>
+    </div>
+    <div id="loginError" class="login-error" role="alert"></div>
+  </div>
+</div>
+
+<div class="app">
+
+  <header class="topbar">
+    <button id="btnMenu" class="icon-btn" type="button" aria-label="打开会话列表" aria-expanded="false">
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 7h16M4 12h16M4 17h16"/></svg>
+    </button>
+    <div class="topbar-mid">
+      <span id="sessionTitle" class="topbar-title ellipsis">ZD Code</span>
+      <span id="connState" class="conn-dot" data-state="idle" aria-hidden="true"></span>
+    </div>
+    <button id="btnModel" class="chip-btn" type="button" aria-label="选择模型">模型</button>
+    <button id="btnTheme" class="icon-btn" type="button" aria-label="切换主题">◐</button>
+  </header>
+
+  <!-- 唯一滚动区。R3：overscroll-behavior:contain，否则下拉触发 WebView 回弹/刷新 -->
+  <!-- aria-live 让流式增量可被读屏播报：移动端更可能在通勤等不看屏场景使用（§6） -->
+  <main class="messages" id="mMessages" role="log" aria-live="polite">
+    <div class="messages-inner" id="mMsgList"></div>
+
+    <div id="emptyState" class="empty">
+      <div class="empty-title">开始一个新的对话</div>
+      <div class="empty-sub">直接在下方输入并发送，第一条消息会自动开始新对话</div>
+    </div>
+
+    <!-- Trace 已按 §10-D3 完全砍掉，此处不留任何入口 -->
+    <div id="thinking" class="thinking hidden" aria-hidden="true">
+      <span></span><span></span><span></span>
+    </div>
+  </main>
+
+  <div class="input-area">
+    <div id="attachBar" class="attach-bar hidden"></div>
+    <div class="input-box">
+      <textarea id="mInput" class="input" rows="1" placeholder="输入消息…"></textarea>
+      <div class="input-actions">
+        <!-- 不加 capture：加了会禁掉相册选择、只留拍照，反而更窄 -->
+        <label class="icon-btn" for="mFileInput" aria-label="添加附件">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M21 12.5l-8.5 8.5a5 5 0 01-7-7l9-9a3.3 3.3 0 014.7 4.7l-9 9a1.7 1.7 0 01-2.4-2.4l8-8"/></svg>
+        </label>
+        <!-- R7：附件能否唤起系统选择器取决于泛微 WebView，实测不通则此项无副作用 -->
+        <input id="mFileInput" type="file" multiple hidden
+               accept="image/*,.pdf,.txt,.md,.py,.js,.ts,.java,.json,.csv">
+        <!-- 停止按钮常显，不靠 hover 显现（R4：触屏无 hover） -->
+        <button id="btnStop" class="icon-btn hidden" type="button" aria-label="停止生成">■</button>
+        <button id="btnSend" class="icon-btn send" type="button" aria-label="发送">➤</button>
+      </div>
+    </div>
+  </div>
+
+</div>
+
+<!-- 抽屉：会话列表 + 设置。宽 min(84vw,320px)（§5.2） -->
+<aside id="drawer" class="drawer" aria-label="会话列表与设置" aria-hidden="true">
+  <div class="drawer-head">
+    <button id="btnNewSession" class="btn-new" type="button">新建对话</button>
+    <button id="btnCloseDrawer" class="icon-btn" type="button" aria-label="关闭">✕</button>
+  </div>
+
+  <div class="drawer-scroll">
+    <div id="mSessionList" class="session-list"></div>
+
+    <div class="drawer-sep"></div>
+
+    <!-- §10-D2：项目文档只读 —— 只发 GET，不提供编辑/新建/删除入口 -->
+    <div class="drawer-sec">
+      <button id="btnDocs" class="drawer-row" type="button" aria-expanded="false">
+        <span>项目文档（只读）</span><span class="row-caret">›</span>
+      </button>
+      <div id="docsPane" class="docs-pane hidden">
+        <div class="docs-path ellipsis" id="docsPath"></div>
+        <div id="docsList" class="docs-list"></div>
+      </div>
+    </div>
+
+    <div class="drawer-sep"></div>
+
+    <div class="drawer-sec">
+      <div class="drawer-label">权限模式</div>
+      <!-- §10-D1：仅 manual / plan。自动类与「无限制」按白名单过滤，
+           属体验层裁剪、不是安全边界（§4.1） -->
+      <div class="seg" id="mModeSeg" role="radiogroup" aria-label="权限模式">
+        <button class="seg-item active" data-mode="manual" type="button" role="radio" aria-checked="true">逐步确认</button>
+        <button class="seg-item" data-mode="plan" type="button" role="radio" aria-checked="false">仅计划</button>
+      </div>
+
+      <div class="drawer-label">主题</div>
+      <div class="seg" id="mThemeSeg" role="radiogroup" aria-label="主题">
+        <button class="seg-item" data-theme="dark" type="button" role="radio">深色</button>
+        <button class="seg-item" data-theme="light" type="button" role="radio">浅色</button>
+        <button class="seg-item" data-theme="warm" type="button" role="radio">暖色</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="drawer-foot">
+    <button id="btnLogout" class="link-btn" type="button">退出登录</button>
+  </div>
+</aside>
+<div id="drawerMask" class="drawer-mask" aria-hidden="true"></div>
+
+<div id="toast" class="toast" role="status" aria-live="polite"></div>
+
+<!-- 模型选择弹层（列表内容由阶段二第 2 步的 js/mobile.js 填充） -->
+<div id="modelSheet" class="sheet hidden" role="dialog" aria-label="选择模型" aria-modal="true">
+  <div class="sheet-panel">
+    <div class="sheet-title">选择模型</div>
+    <div id="modelList" class="model-list"></div>
+    <button id="btnCloseSheet" class="btn-ghost" type="button">取消</button>
+  </div>
+</div>
+
+<!-- 依赖：三个库都从 /static 取，移动端不复制（§3.1 缓解措施）。
+     marked 原本是 CDN 加载，现改为本地文件 —— 移动端不能依赖公网 CDN，
+     出口被限或泛微 WebView 拦外域脚本时，消息渲染会整片空白。 -->
+<script src="/static/js/marked.min.js"></script>
+<script src="/static/js/highlight.min.js"></script>
+<script src="/static/js/purify.min.js"></script>
+<script src="js/ui.js"></script>
+<!-- 协议层：鉴权探测、会话、WebSocket 收发、消息渲染、文档只读浏览 -->
+<script src="js/mobile.js"></script>
+
+</body>
+</html>

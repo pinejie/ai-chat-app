@@ -31,6 +31,7 @@ PUBLIC_API_PATHS = {"/api/auth/status", "/api/auth/login", "/api/auth/logout"}
 ENV_PATH = Path(__file__).resolve().parent.parent / '.env'
 PROJECT_DIR = Path(__file__).resolve().parent.parent.parent
 STATIC_DIR = PROJECT_DIR / "frontend" / "static"
+MOBILE_DIR = PROJECT_DIR / "frontend" / "mobile"
 DATA_DIR = PROJECT_DIR / "data" / "sessions"
 PREVIEW_CACHE_DIR = PROJECT_DIR / "data" / "preview_cache"
 SLIDE_CACHE_DIR = PROJECT_DIR / "data" / "slide_cache"
@@ -80,6 +81,9 @@ app = FastAPI(title="Claude Code Web Bridge", version="0.3.0", lifespan=lifespan
 # 前后端同源，不需要 CORS。之前的 allow_origins=["*"] + credentials 已移除。
 
 app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
+# 移动端 H5（独立前端代码，见 project/ai-chat-app/01-移动端适配需求.md §3.2 D2）
+# html=True：访问 /m 自动重定向到 /m/ 并返回 index.html，静态资源走相对路径 /m/*
+app.mount("/m", StaticFiles(directory=str(MOBILE_DIR), html=True), name="mobile")
 
 
 def _is_authed(token_value) -> bool:
