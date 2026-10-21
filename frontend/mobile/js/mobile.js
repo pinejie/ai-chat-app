@@ -16,6 +16,7 @@
   const MODE_NAME = { manual: '逐步确认', plan: '仅计划' };
   const MAX_FILE = 20 * 1024 * 1024;                                // 与 PC/upload.js 一致
   const RECONNECT_MIN_GAP = 5000;                                   // §9 R-6 重连节流
+  const AUTO_RECONNECT_MAX = 5;                                     // 前台掉线自动重连上限（退避 5/10/20/40/80s）
   const SID_KEY = 'm-current-sid';
   const IMG_RE = /\.(png|jpe?g|gif|webp|svg|bmp)$/i;
 
@@ -29,8 +30,11 @@
   let modelOptions = ['default'];
   let curMode = 'manual', curModel = 'default';
   let lastReconnectAt = 0;
+  let reconnectTimer = null;             // 自动重连退避定时器
+  let reconnectAttempts = 0;             // 本轮自动重试次数（连上/切会话/手动点击后清零）
   let sessionsCache = [];                // 校验 localStorage 里的旧 sid 是否仍存在
   let docTrail = '';                     // 文档浏览器当前相对路径
+  let renameTargetId = '';               // 重命名弹层当前针对的会话 id
 
   /* ---------------- 文本渲染 ---------------- */
 
@@ -89,6 +93,7 @@
   function onUnauthorized() {
     connected = false;
     setConn('err');
+    MUI.setRenameVisible(false);       // 改名弹层压在登录页下面会显得页面坏了
     MUI.setLoginVisible(true);
     MUI.toast('口令已失效，请重新登录', true);
   }
@@ -143,6 +148,8 @@
       const list = await api('/api/sessions');
       sessionsCache = Array.isArray(list) ? list : [];
       renderSessionList(sessionsCache);
+      // 首条消息后后端才生成 title，result 事件会走到这里刷新列表，顶栏跟着更新
+      refreshHeader();
     } catch (e) {
       MUI.toast('会话列表加载失败：' + e.message, true);
     }
@@ -191,8 +198,67 @@
     t.className = 'session-item-title';
     t.textContent = item.title || '新对话';
     row.appendChild(t);
+    const pen = document.createElement('button');
+    pen.className = 'session-rename';
+    pen.type = 'button';
+    pen.setAttribute('aria-label', '重命名「' + (item.title || '新对话') + '」');
+    pen.textContent = '✎';
+    pen.addEventListener('click', function (e) {
+      e.stopPropagation();               // 冒泡到行会被当成「打开会话」
+      openRename(item);
+    });
+    row.appendChild(pen);
     row.addEventListener('click', function () { openSession(item.id); });
     return row;
+  }
+
+  /* ---------------- 重命名 ----------------
+     入口是抽屉行内铅笔（手机上「双击/长按」不可发现，这次的问题正是「没地方改」）。
+     后端 PUT title 会标 manually_set，且 claude_session 初始化时尊重该标记，
+     手动名不会被首条消息的自动标题覆盖。 */
+
+  function openRename(item) {
+    renameTargetId = item.id;
+    const cur = item.title || '新对话';
+    el.renameInput.value = cur === '新对话' ? '' : cur;
+    el.renameError.textContent = '';
+    MUI.setRenameVisible(true);
+  }
+
+  async function saveRename() {
+    if (!renameTargetId) return;
+    const title = el.renameInput.value.trim();
+    if (!title) { el.renameError.textContent = '名称不能为空'; return; }
+    try {
+      await api('/api/sessions/' + renameTargetId + '/title', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ title: title }),
+      });
+    } catch (e) {
+      el.renameError.textContent = '改名失败：' + e.message;
+      return;                          // 失败不关弹层，输入不丢
+    }
+    const me = sessionsCache.filter(function (s) { return s.id === renameTargetId; })[0];
+    if (me) me.title = title;          // 本地缓存同步改，避免为刷一行去拉全量列表
+    renderSessionList(sessionsCache);
+    refreshHeader();
+    MUI.setRenameVisible(false);
+    MUI.toast('已改好');
+  }
+
+  function bindRename() {
+    if (!el.btnRenameSave) return;
+    el.btnRenameSave.addEventListener('click', saveRename);
+    el.btnRenameCancel.addEventListener('click', function () { MUI.setRenameVisible(false); });
+    el.renameInput.addEventListener('keydown', function (e) {
+      if (MUI.isComposing(e)) return;             // 中文输入法回车的 Enter 不是「保存」
+      if (e.key === 'Enter') { e.preventDefault(); saveRename(); }
+      if (e.key === 'Escape') MUI.setRenameVisible(false);
+    });
+    if (el.renameOverlay) el.renameOverlay.addEventListener('click', function (e) {
+      if (e.target === el.renameOverlay) MUI.setRenameVisible(false);   // 点遮罩关闭，同 sheet
+    });
   }
 
   /* ---------------- 会话生命周期 ---------------- */
@@ -313,11 +379,16 @@
     } catch (e) { /* 设置读不到时保持当前显示，不阻塞进入会话 */ }
   }
 
+  /* 顶栏显示对话标题（与侧边栏同一数据源）。title 由后端在首条消息时生成，
+     之前写死「对话 <sid前6位>」是调试期残留，用户看到一串 hex 无法辨识对话。 */
   function refreshHeader() {
-    el.sessionTitle.textContent = sid ? ('对话 ' + sid.slice(0, 6)) : 'ZD Code';
+    if (!sid) { el.sessionTitle.textContent = 'ZD Code'; return; }
+    const me = sessionsCache.filter(function (s) { return s.id === sid; })[0];
+    el.sessionTitle.textContent = (me && me.title) || '新对话';
   }
 
   function teardownWS() {
+    clearTimeout(reconnectTimer); reconnectTimer = null; reconnectAttempts = 0;
     if (ws) { try { ws.close(); } catch (e) {} }
     ws = null; connected = false;
     generating = false;
@@ -334,30 +405,42 @@
 
   /* ---------------- WebSocket ---------------- */
 
-  function connect(target) {
+  function connect(target, isReconnect) {
     let socket;
     try {
       socket = new WebSocket(WS_BASE + '/ws/' + target);
     } catch (e) {
       setConn('err');
       addSystemMsg('连接失败：' + e.message);
+      scheduleAutoReconnect();
       return;
     }
     ws = socket;
     setConn('reconnecting');
 
-    socket.onopen = function () {
+    socket.onopen = async function () {
       if (ws !== socket) return;                 // 旧 socket 的回调可能晚于新连接到达（同 PC 端注释）
       connected = true;
+      reconnectAttempts = 0;
+      clearTimeout(reconnectTimer); reconnectTimer = null;
       setConn('ok');
+      if (isReconnect) {
+        // 断线期间后端照常把回复落库：重连必须补载历史，否则界面永远停在断点之前。
+        // 顺序不能反：先补载再 verifyGenerating，流式气泡才会落在正确位置。
+        await reloadHistoryQuiet();
+        loadSessions();
+        MUI.toast('已重连');
+        if (ws !== socket) return;               // 补载期间可能已切会话，旧回调到此为止
+      }
       verifyGenerating(target);
     };
     socket.onclose = function () {
-      if (ws !== socket) return;
+      if (ws !== socket) return;                 // 主动关闭（切会话/重连前 teardown）走不到下面
       connected = false;
       setConn('err');
       if (generating) verifyGenerating(target);  // 掉线不等于停止：以后端真实状态为准
       else setGenerating(false);
+      scheduleAutoReconnect();
     };
     socket.onerror = function () {
       if (ws !== socket) return;
@@ -369,6 +452,22 @@
       try { msg = JSON.parse(e.data); } catch (err) { return; }
       handleMsg(msg);
     };
+  }
+
+  /* 前台掉线自动重连：被动 close 后按 5s/10s/20s/40s/80s 退避。第一档必须 ≥
+     RECONNECT_MIN_GAP，否则会被重连节流静默吞掉。额度用尽后不再自动试，
+     由断线横幅的手动「重连」兜底；切后台的情况由 visibilitychange 钩子接手。 */
+  function scheduleAutoReconnect() {
+    if (!sid || connected || reconnectTimer) return;
+    if (reconnectAttempts >= AUTO_RECONNECT_MAX) return;
+    const delay = RECONNECT_MIN_GAP * Math.pow(2, reconnectAttempts);
+    reconnectAttempts++;
+    reconnectTimer = setTimeout(function () {
+      reconnectTimer = null;
+      if (!sid || connected) return;
+      if (document.visibilityState !== 'visible') return;   // 回前台时由 bindReconnect 重开一轮
+      reconnectNow('自动重连');
+    }, delay);
   }
 
   /* 后端是唯一事实来源：WS 断了不代表生成结束（§5.3 R5） */
@@ -508,7 +607,12 @@
       try { await ensureSession(); }
       catch (e) { MUI.toast('新建对话失败：' + e.message + '，已保留你输入的内容', true); return; }
     }
-    if (!connected) { await reconnectNow('手动重连'); if (!connected) return; }
+    if (!connected) {
+      await reconnectNow('手动重连');
+      // connect 是异步的，onopen 之前发送必丢；等一下再判
+      if (!connected) await waitOpen(3000);
+      if (!connected) { MUI.toast('连接未恢复，可点顶部横幅「重连」', true); return; }
+    }
 
     let paths = [];
     if (picked.length) {
@@ -566,6 +670,17 @@
   function setConn(state) {
     if (el.connState) el.connState.setAttribute('data-state', state);
     syncInputUi();
+    /* 断线横幅：有会话且没连上就常驻。「重连中」只在自动退避轮次内保持可见，
+       首次进入会话的 reconnecting 不闪横幅。文案区分「还有自动重试」和「只能手动」。 */
+    if (el.offlineBar) {
+      const show = !!sid && (state === 'err' || (state === 'reconnecting' && reconnectAttempts > 0));
+      el.offlineBar.classList.toggle('hidden', !show);
+      if (show && el.offlineText) {
+        el.offlineText.textContent = reconnectAttempts >= AUTO_RECONNECT_MAX
+          ? '连接已断开，点右侧「重连」重试'
+          : '连接已断开，正在自动重连…';
+      }
+    }
   }
 
   /* 无会话时发送按钮可点（点了会静默新建并发送，§11）；有会话仍要求 WS 已连。
@@ -761,12 +876,29 @@
 
   /* ---------------- 回前台自动重连（§5.3 R5 / §9 R-6） ---------------- */
 
+  /* 断线横幅的「重连」：手动点击重新发放一轮自动退避额度。
+     仍受 RECONNECT_MIN_GAP 节流——弱网下反复重连会重复触发后端 --resume 子进程。 */
+  function bindOfflineBar() {
+    if (!el.btnReconnect) return;
+    el.btnReconnect.addEventListener('click', function () {
+      if (!sid) return;
+      if (connected) { MUI.toast('当前已连接'); return; }
+      if (Date.now() - lastReconnectAt < RECONNECT_MIN_GAP) { MUI.toast('刚刚试过一次，稍等几秒再点', true); return; }
+      clearTimeout(reconnectTimer); reconnectTimer = null;
+      reconnectAttempts = 0;
+      reconnectNow('横幅手动重连');
+    });
+  }
+
   function bindReconnect() {
     document.addEventListener('visibilitychange', function () {
       if (document.visibilityState !== 'visible') return;
       MUI.syncViewport();
       if (!sid) return;
-      if (!ws || ws.readyState !== WebSocket.OPEN) reconnectNow('回到前台');
+      if (!ws || ws.readyState !== WebSocket.OPEN) {
+        reconnectAttempts = 0;                     // 回前台视作新一轮，退避额度重新计
+        reconnectNow('回到前台');
+      }
       else verifyGenerating(sid);
     });
   }
@@ -778,7 +910,7 @@
     if (!sid) return;
     MUI.toast('正在重连…');
     teardownWSKeepSid();
-    connect(sid);
+    connect(sid, true);
     await verifyGenerating(sid);
   }
 
@@ -823,6 +955,8 @@
     bindModeSeg();
     bindDocs();
     bindReconnect();
+    bindOfflineBar();
+    bindRename();
     setConn('idle');
     setGenerating(false);
     ensureLogin().then(function (ok) { if (ok) startUp(); });

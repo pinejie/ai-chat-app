@@ -84,10 +84,22 @@ body{height:var(--vvh);overflow:hidden;background:var(--bg);color:var(--text);
   font-size:16px;cursor:pointer;font-family:inherit}
 .icon-btn:active{background:var(--bg3);color:var(--text)}
 .icon-btn.send{color:var(--accent2)}
+/* 生成中的「■ 停止」：红色实心，对齐 PC .stop-btn 语义——灰色易被当成禁用态 */
+.icon-btn.stop{color:#fff;background:var(--danger);border-radius:12px}
+.icon-btn.stop:active{background:#b91c1c;color:#fff}
 .chip-btn{height:44px;padding:0 10px;flex:none;border:1px solid var(--border2);background:var(--bg3);
   color:var(--text2);border-radius:14px;font-size:12px;cursor:pointer;font-family:inherit;
   max-width:88px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .chip-btn:active{background:var(--bg4)}
+
+/* ---- 断线横幅：顶栏下方常驻条，mobile.js setConn 控制显隐（R6：44px 高度） ---- */
+.offline-bar{flex:none;display:flex;align-items:center;justify-content:space-between;gap:10px;
+  height:44px;padding:0 12px;background:rgba(220,38,38,.10);border-bottom:1px solid var(--danger);
+  font-size:13px;color:var(--text2)}
+.offline-text{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.offline-btn{flex:none;height:32px;padding:0 14px;border:1px solid var(--danger);border-radius:16px;
+  background:transparent;color:var(--danger2);font-size:13px;cursor:pointer;font-family:inherit}
+.offline-btn:active{background:rgba(220,38,38,.18)}
 
 /* ---- 消息区：唯一滚动容器 ---- */
 .messages{flex:1;overflow-y:auto;overflow-x:hidden;
@@ -184,6 +196,11 @@ hr{border:none;border-top:1px solid var(--border);margin:12px 0}
 .session-item:active{background:var(--bg3)}
 .session-item.active{background:var(--bg3);color:var(--text);border-left-color:var(--accent2)}
 .session-item-title{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+/* 行内重命名按钮：44px 命中区（R6），靠右贴边由行 padding 让位 */
+.session-rename{flex:none;width:44px;height:44px;display:inline-flex;align-items:center;justify-content:center;
+  border:none;background:transparent;color:var(--text5);font-size:17px;cursor:pointer;
+  border-radius:var(--radius-sm);font-family:inherit;margin-right:-8px}
+.session-rename:active{background:var(--bg4);color:var(--text)}
 .session-date{font-size:10.5px;color:var(--text5);font-family:var(--font-mono);padding:8px 12px 4px}
 
 .docs-pane{padding:4px 0 8px}
@@ -222,6 +239,15 @@ hr{border:none;border-top:1px solid var(--border);margin:12px 0}
 .link-btn{background:transparent;border:none;color:var(--link);font-size:14px;
   padding:12px 8px;cursor:pointer;font-family:inherit}
 .login-error{min-height:18px;font-size:13px;color:var(--danger2);text-align:center}
+
+/* ---- 重命名弹层：遮罩 + 居中卡片；z 62 高于抽屉(40)低于 toast(70) ---- */
+.rename-overlay{position:fixed;inset:0;z-index:62;background:rgba(0,0,0,.55);
+  display:flex;align-items:center;justify-content:center;padding:20px}
+.rename-card{width:min(340px,100%);background:var(--bg2);border:1px solid var(--border);
+  border-radius:16px;padding:18px;display:flex;flex-direction:column;gap:12px;box-shadow:var(--shadow-md)}
+.rename-title{font-size:15px;font-weight:600;color:var(--text);text-align:center}
+.rename-row{display:flex;align-items:center;gap:10px}
+.rename-row .link-btn{flex:none;padding:12px 14px;color:var(--text3)}
 
 /* ---- 模型弹层（底部抽屉式，贴合触屏） ---- */
 .sheet{position:fixed;inset:0;z-index:55;background:rgba(0,0,0,.5);

@@ -31,6 +31,22 @@
   </div>
 </div>
 
+<!-- 重命名弹层：抽屉会话行内的铅笔按钮触发（mobile.js bindRename），
+     输入与按钮复用登录弹层的样式类，保持同一套视觉 -->
+<div id="renameOverlay" class="rename-overlay hidden">
+  <div class="rename-card">
+    <div class="rename-title">重命名对话</div>
+    <input id="renameInput" class="login-input" type="text" maxlength="50"
+           autocomplete="off" autocapitalize="off" spellcheck="false"
+           enterkeyhint="done" placeholder="输入对话名称" aria-label="对话名称">
+    <div id="renameError" class="login-error" role="alert"></div>
+    <div class="rename-row">
+      <button id="btnRenameCancel" class="link-btn" type="button">取消</button>
+      <button id="btnRenameSave" class="btn-primary" type="button">保存</button>
+    </div>
+  </div>
+</div>
+
 <div class="app">
 
   <header class="topbar">
@@ -44,6 +60,12 @@
     <button id="btnModel" class="chip-btn" type="button" aria-label="选择模型">模型</button>
     <button id="btnTheme" class="icon-btn" type="button" aria-label="切换主题">◐</button>
   </header>
+
+  <!-- 断线横幅：有会话且 WS 断开时出现（mobile.js setConn 控制显隐），提供手动重连入口 -->
+  <div id="offlineBar" class="offline-bar hidden" role="alert">
+    <span id="offlineText" class="offline-text"></span>
+    <button id="btnReconnect" class="offline-btn" type="button">重连</button>
+  </div>
 
   <!-- 唯一滚动区。R3：overscroll-behavior:contain，否则下拉触发 WebView 回弹/刷新 -->
   <!-- aria-live 让流式增量可被读屏播报：移动端更可能在通勤等不看屏场景使用（§6） -->
@@ -74,7 +96,7 @@
         <input id="mFileInput" type="file" multiple hidden
                accept="image/*,.pdf,.txt,.md,.py,.js,.ts,.java,.json,.csv">
         <!-- 停止按钮常显，不靠 hover 显现（R4：触屏无 hover） -->
-        <button id="btnStop" class="icon-btn hidden" type="button" aria-label="停止生成">■</button>
+        <button id="btnStop" class="icon-btn stop hidden" type="button" aria-label="停止生成">■</button>
         <button id="btnSend" class="icon-btn send" type="button" aria-label="发送">➤</button>
       </div>
     </div>

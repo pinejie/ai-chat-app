@@ -29,6 +29,9 @@
     // 以下由第 2 步的 mobile.js 使用，统一在此注册，避免两个文件各拿一半
     btnSend: $('btnSend'), btnStop: $('btnStop'), mFileInput: $('mFileInput'),
     mSessionList: $('mSessionList'), sessionTitle: $('sessionTitle'), connState: $('connState'),
+    offlineBar: $('offlineBar'), offlineText: $('offlineText'), btnReconnect: $('btnReconnect'),
+    renameOverlay: $('renameOverlay'), renameInput: $('renameInput'), renameError: $('renameError'),
+    btnRenameCancel: $('btnRenameCancel'), btnRenameSave: $('btnRenameSave'),
     docsList: $('docsList'), docsPath: $('docsPath'),
     btnNewSession: $('btnNewSession'), btnLogout: $('btnLogout'),
     modelList: $('modelList'), attachBar: $('attachBar'),
@@ -192,6 +195,15 @@
     });
   }
 
+  /* 重命名弹层：mobile.js 管数据与保存，这里只管显隐和初始聚焦（同登录套路） */
+  function setRenameVisible(visible) {
+    if (!el.renameOverlay) return;
+    el.renameOverlay.classList.toggle('hidden', !visible);
+    if (visible && el.renameInput) {
+      setTimeout(function () { try { el.renameInput.focus(); } catch (e) {} }, 120);
+    }
+  }
+
   /* ---------------- 通用反馈 ---------------- */
 
   let toastTimer = null;
@@ -240,7 +252,8 @@
     el: el, $: $,
     applyTheme: applyTheme, currentTheme: currentTheme,
     setDrawer: setDrawer, closeSheet: closeSheet,
-    setLoginVisible: setLoginVisible,
+    setLoginVisible: setLoginVisible, setRenameVisible: setRenameVisible,
+    isComposing: isComposing,
     syncViewport: syncViewport, autoGrow: autoGrow,
     scrollToBottom: scrollToBottom, setEmptyVisible: setEmptyVisible,
     setThinking: setThinking, toast: toast, markSeg: markSeg,
