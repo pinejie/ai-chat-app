@@ -1,5 +1,10 @@
+# 依赖清单。版本以「生产实际运行」为准（非早期设计稿的低版本）。
+# 2026-10-21 systemd 化时核对：生产用的是 user-site 安装的 uvicorn 0.52.4 / pydantic 2.13.5，
+# 而旧 requirements 写的是 0.24.0/2.5.2 —— 从未在生产跑过。现把 venv 与生产对齐，此文件随之更新。
+# 对齐细节见 deploy/ 下的 systemd 单元与 run 脚本。
 fastapi==0.104.1
-uvicorn[standard]==0.24.0
+uvicorn[standard]==0.52.4
 websockets==12.0
-pydantic==2.5.2
+pydantic==2.13.5
 python-dotenv==1.0.1
+python-multipart==0.0.32

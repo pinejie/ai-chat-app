@@ -1,0 +1,21 @@
+[Unit]
+Description=ZD Code (ai-chat-app, FastAPI + Claude CLI bridge)
+# 设计文档见 /home/wgd/ws/project/ai-chat-app/ 下的 .md（中文路径不作 URL 塞进 unit）
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=wgd
+WorkingDirectory=/home/wgd/ai-chat-app/backend
+# 只 exec 前台进程；TRUSTED_PROXY_IPS 由脚本自己从 backend/.env 读，配置源仍是 .env
+ExecStart=/home/wgd/ai-chat-app/ai-chat-app-run.sh
+Restart=always
+RestartSec=3
+# append:（systemd≥240，本机 255）追加而非清零 —— 修掉旧脚本「每次重启 uvicorn.log 被 > 清空」的问题。
+# journald 同时留一份：journalctl -u zd-code
+StandardOutput=append:/home/wgd/ai-chat-app/backend/uvicorn.log
+StandardError=append:/home/wgd/ai-chat-app/backend/uvicorn.log
+
+[Install]
+WantedBy=multi-user.target
