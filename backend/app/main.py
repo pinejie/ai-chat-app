@@ -54,7 +54,7 @@ async def _cleanup_expired_sessions():
         now = time.monotonic()
         expired = [
             sid for sid, s in sessions.items()
-            if s.websocket is None and (now - s.last_active) > SESSION_TTL
+            if not s.clients and (now - s.last_active) > SESSION_TTL
         ]
         for sid in expired:
             await sessions[sid].stop()
@@ -242,11 +242,7 @@ async def stop_session(session_id: str):
         raise HTTPException(404, "Session not found")
     session = sessions[session_id]
     await session.stop()
-    if session.websocket:
-        try:
-            await session.websocket.send_json({"type": "stopped"})
-        except Exception:
-            pass
+    await session.broadcast({"type": "stopped"})   # 所有观看该会话的页面都要看到「已中断」
     return {"ok": True}
 
 
@@ -323,7 +319,7 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str):
     if session_id not in sessions:
         sessions[session_id] = ClaudeSession(session_id, WORKSPACE_DIR)
     session = sessions[session_id]
-    session.websocket = websocket
+    session.clients.add(websocket)
     session.touch()
     try:
         while True:
@@ -332,7 +328,7 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str):
                 files = data.get("files", [])
                 asyncio.create_task(session.send_and_stream(data["content"], files))
     except WebSocketDisconnect:
-        session.websocket = None
+        session.clients.discard(websocket)
     except Exception as e:
         import logging
         logging.getLogger("claude-bridge").error("WebSocket error: %s", e)
@@ -340,7 +336,7 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str):
             await websocket.send_json({"type": "error", "content": str(e)})
         except Exception:
             pass
-        session.websocket = None
+        session.clients.discard(websocket)
 
 
 # ─── Routes: Projects ─────────────────────────────────────────────────────────

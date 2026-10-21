@@ -6,7 +6,7 @@ import os
 import re
 import time
 from collections import defaultdict
-from typing import Optional
+from typing import Optional, Set
 
 from fastapi import WebSocket
 
@@ -250,7 +250,9 @@ class ClaudeSession:
         self.permission_mode = saved.get("permission_mode", self.DEFAULT_MODE)
         self.model = saved.get("model", "default")
         self.claude_session_id: Optional[str] = SessionStore.load_claude_session_id(session_id)
-        self.websocket: Optional[WebSocket] = None
+        # 多页面同时观看：一个会话可挂多个 WS 连接（PC + 手机、多个标签页）。
+        # 原为单槽 self.websocket，新连接顶掉旧连接，旧页面静默收不到推送。
+        self.clients: Set[WebSocket] = set()
         self.process: Optional[asyncio.subprocess.Process] = None
         self.last_active: float = 0
         self._first_message = not SessionStore.is_title_manually_set(session_id)
@@ -364,16 +366,12 @@ class ClaudeSession:
                     self.claude_session_id,
                 )
                 # Notify frontend immediately before clearing session_id
-                logger.warning(f"Session lost: websocket={'connected' if self.websocket else 'None'}")
-                if self.websocket:
-                    try:
-                        await self.websocket.send_json({
-                            "type": "recovery_start",
-                            "content": "正在恢复上下文，请稍候...",
-                        })
-                        logger.warning("Sent recovery_start to frontend")
-                    except Exception as e:
-                        logger.warning(f"Failed to send recovery_start: {e}")
+                logger.warning(f"Session lost: clients={len(self.clients)}")
+                await self.broadcast({
+                    "type": "recovery_start",
+                    "content": "正在恢复上下文，请稍候...",
+                })
+                logger.warning("Sent recovery_start to frontend")
                 self.claude_session_id = None
                 SessionStore.clear_claude_session_id(self.id)
                 # Enter recovery flow
@@ -382,14 +380,10 @@ class ClaudeSession:
                     await self._recover_from_history(history, text, files)
                 else:
                     # No history, just notify and start fresh
-                    if self.websocket:
-                        try:
-                            await self.websocket.send_json({
-                                "type": "error",
-                                "content": "会话已丢失，已开始新对话",
-                            })
-                        except Exception:
-                            pass
+                    await self.broadcast({
+                        "type": "error",
+                        "content": "会话已丢失，已开始新对话",
+                    })
 
     async def _read_stdout(self, process):
         if not process.stdout:
@@ -434,18 +428,25 @@ class ClaudeSession:
             except json.JSONDecodeError:
                 await self._safe_send({"type": "raw", "content": line.decode().strip()})
 
+    async def broadcast(self, payload: dict) -> bool:
+        """把一条事件发给该会话的所有在线页面。
+        单条连接失败（半开、超时）只剔除自己，不连带其他页面；
+        每个 send 加超时：半开连接的发送缓冲写满时会阻塞整场广播。"""
+        sent = False
+        for ws in list(self.clients):
+            try:
+                await asyncio.wait_for(ws.send_json(payload), timeout=5)
+                sent = True
+            except Exception as e:
+                logger.info("Dropping dead websocket client: %s", e)
+                self.clients.discard(ws)
+        return sent
+
     async def _safe_send(self, payload: dict) -> bool:
-        """Send to the WebSocket if one is attached. Failures (client gone) are logged, never raised:
-        the stdout reader must keep draining the process and persisting the reply."""
-        ws = self.websocket
-        if ws is None:
-            return False
-        try:
-            await ws.send_json(payload)
-            return True
-        except Exception as e:
-            logger.info("WebSocket send failed, continuing to drain claude output: %s", e)
-            return False
+        """Send to all attached WebSocket clients. Failures (client gone) are
+        logged, never raised: the stdout reader must keep draining the process
+        and persisting the reply."""
+        return await self.broadcast(payload)
 
     async def _read_stderr(self, process):
         if not process.stderr:
@@ -542,14 +543,10 @@ class ClaudeSession:
             recovery_text = text
 
         # 通知前端恢复完成
-        if self.websocket:
-            try:
-                await self.websocket.send_json({
-                    "type": "recovery_complete",
-                    "content": "上下文恢复完成",
-                })
-            except Exception:
-                pass
+        await self.broadcast({
+            "type": "recovery_complete",
+            "content": "上下文恢复完成",
+        })
 
         await self._send_and_stream_impl(recovery_text, files)
 
@@ -678,25 +675,17 @@ class ClaudeSession:
 
     async def _notify_recovery_start(self):
         """通知前端正在恢复上下文。"""
-        if self.websocket:
-            try:
-                await self.websocket.send_json({
-                    "type": "recovery_start",
-                    "content": "正在恢复上下文，请稍候...",
-                })
-            except Exception:
-                pass
+        await self.broadcast({
+            "type": "recovery_start",
+            "content": "正在恢复上下文，请稍候...",
+        })
 
     async def _notify_recovery_failed(self):
         """通知前端恢复失败。"""
-        if self.websocket:
-            try:
-                await self.websocket.send_json({
-                    "type": "recovery_failed",
-                    "content": "恢复失败，已开始新会话",
-                })
-            except Exception:
-                pass
+        await self.broadcast({
+            "type": "recovery_failed",
+            "content": "恢复失败，已开始新会话",
+        })
 
     async def stop(self):
         if self.process:
