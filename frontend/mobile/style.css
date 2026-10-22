@@ -92,6 +92,24 @@ body{height:var(--vvh);overflow:hidden;background:var(--bg);color:var(--text);
   max-width:88px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .chip-btn:active{background:var(--bg4)}
 
+/* ---- 多工作目录：抽屉当前目录行 + 选择弹层 ---- */
+.drawer-ws{flex:none;display:flex;align-items:center;gap:8px;padding:8px 12px;
+  border-bottom:1px solid var(--border);font-size:12px;color:var(--text3)}
+.drawer-ws-text{flex:1;min-width:0}
+.drawer-ws-btn{flex:none;height:30px;padding:0 10px;border:1px solid var(--border2);background:var(--bg3);
+  color:var(--text2);border-radius:8px;font-size:12px;cursor:pointer;font-family:inherit}
+.drawer-ws-btn:active{background:var(--bg4)}
+.ws-warn{margin:0 0 10px;padding:8px 10px;border-radius:10px;background:rgba(245,158,11,.12);
+  border:1px solid rgba(245,158,11,.4);color:var(--warn);font-size:12px;line-height:1.5}
+.ws-options{display:flex;flex-direction:column;gap:6px;margin-bottom:10px;max-height:40vh;overflow-y:auto}
+.ws-option{min-height:44px;display:flex;flex-direction:column;align-items:flex-start;gap:2px;
+  padding:8px 12px;border:1px solid var(--border2);border-radius:12px;background:var(--bg3);
+  color:var(--text);font-family:inherit;text-align:left;cursor:pointer}
+.ws-option:active{background:var(--bg4)}
+.ws-option.default{border-color:var(--accent2)}
+.ws-option-name{font-size:14px}
+.ws-option-path{font-size:11px;color:var(--text3);max-width:100%}
+
 /* ---- 断线横幅：顶栏下方常驻条，mobile.js setConn 控制显隐（R6：44px 高度） ---- */
 .offline-bar{flex:none;display:flex;align-items:center;justify-content:space-between;gap:10px;
   height:44px;padding:0 12px;background:rgba(220,38,38,.10);border-bottom:1px solid var(--danger);

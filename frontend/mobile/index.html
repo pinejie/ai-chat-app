@@ -111,6 +111,12 @@
     <button id="btnCloseDrawer" class="icon-btn" type="button" aria-label="关闭">✕</button>
   </div>
 
+  <!-- 当前对话的工作目录（创建时快照，换目录=fork新对话；注册表管理在 PC 端） -->
+  <div class="drawer-ws" id="drawerWs">
+    <span class="drawer-ws-text ellipsis" id="drawerWsText">工作目录：-</span>
+    <button id="btnWsChange" class="drawer-ws-btn" type="button">换目录…</button>
+  </div>
+
   <div class="drawer-scroll">
     <div id="mSessionList" class="session-list"></div>
 
@@ -161,6 +167,16 @@
     <div class="sheet-title">选择模型</div>
     <div id="modelList" class="model-list"></div>
     <button id="btnCloseSheet" class="btn-ghost" type="button">取消</button>
+  </div>
+</div>
+
+<!-- 工作目录选择弹层：新建对话与换目录（fork）复用 -->
+<div id="wsSheet" class="sheet hidden" role="dialog" aria-label="选择工作目录" aria-modal="true">
+  <div class="sheet-panel">
+    <div class="sheet-title" id="wsSheetTitle">选择工作目录</div>
+    <div class="ws-warn hidden" id="wsSheetWarn">换目录相当于在新目录创建一个新对话：AI 上下文重新开始，旧对话原样保留。</div>
+    <div class="ws-options" id="wsSheetList"></div>
+    <button id="btnCloseWsSheet" class="btn-ghost" type="button">取消</button>
   </div>
 </div>
 

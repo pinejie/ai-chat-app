@@ -35,6 +35,7 @@
   let sessionsCache = [];                // 校验 localStorage 里的旧 sid 是否仍存在
   let docTrail = '';                     // 文档浏览器当前相对路径
   let renameTargetId = '';               // 重命名弹层当前针对的会话 id
+  let wsRegistry = { items: [], default_id: '' };   // 工作目录注册表（GET /api/workspaces）
 
   /* ---------------- 文本渲染 ---------------- */
 
@@ -261,11 +262,53 @@
     });
   }
 
-  /* ---------------- 会话生命周期 ---------------- */
+  /* ---------------- 多工作目录 ----------------
+     注册表管理留在 PC 端（低频且要输路径）；移动端只做两件事：
+     新建对话选目录（默认项预选标注）、"换目录"= 在新目录 fork 新对话。
+     对话目录是创建时的快照，之后不可改——claude CLI 会话记录按目录存储，
+     中途换目录 --resume 必失败，语义就是"新目录新对话"。 */
 
-  async function newSession() {
+  function wsQS() { return '&session=' + encodeURIComponent(sid); }
+
+  async function loadWorkspaces() {
     try {
-      await ensureSession();
+      wsRegistry = await api('/api/workspaces');
+    } catch (e) { /* 读不到注册表不阻塞会话功能；新建/换目录时会提示 */ }
+  }
+
+  function wsSheetOpen(mode) {
+    if (!wsRegistry.items || !wsRegistry.items.length) {
+      MUI.toast('工作目录列表为空，请先在 PC 端「目录管理」添加', true);
+      return;
+    }
+    el.wsSheetTitle.textContent = mode === 'fork' ? '换目录（创建新对话）' : '新建对话 · 选择工作目录';
+    el.wsSheetWarn.classList.toggle('hidden', mode !== 'fork');
+    el.wsSheetList.innerHTML = '';
+    wsRegistry.items.forEach(function (it) {
+      const b = document.createElement('button');
+      b.type = 'button';
+      b.className = 'ws-option' + (it.id === wsRegistry.default_id ? ' default' : '');
+      const nm = document.createElement('span');
+      nm.className = 'ws-option-name';
+      nm.textContent = it.name + (it.is_default ? '（默认）' : '');
+      const pt = document.createElement('span');
+      pt.className = 'ws-option-path ellipsis';
+      pt.textContent = it.path;
+      b.appendChild(nm); b.appendChild(pt);
+      b.addEventListener('click', function () {
+        wsSheetClose();
+        if (mode === 'fork') { forkSession(it.id); } else { newSessionIn(it.id); }
+      });
+      el.wsSheetList.appendChild(b);
+    });
+    el.wsSheet.classList.remove('hidden');
+  }
+
+  function wsSheetClose() { el.wsSheet.classList.add('hidden'); }
+
+  async function newSessionIn(wsId) {
+    try {
+      await ensureSession(wsId);
       MUI.setDrawer(false);
       MUI.toast('已新建对话');
     } catch (e) {
@@ -273,13 +316,52 @@
     }
   }
 
+  async function forkSession(wsId) {
+    if (!sid) return;
+    try {
+      const data = await postJSON('/api/sessions/' + sid + '/fork', { workspace_id: wsId });
+      await enterSession(data.session_id);
+      await loadSessions();
+      MUI.setDrawer(false);
+      MUI.toast('已在新目录创建对话');
+    } catch (e) {
+      MUI.toast('换目录失败：' + e.message, true);
+    }
+  }
+
+  function renderDrawerWs() {
+    if (!el.drawerWs) return;
+    el.drawerWs.classList.toggle('hidden', !sid);
+    if (!sid) return;
+    const s = sessionsCache.filter(function (x) { return x.id === sid; })[0];
+    const path = (s && s.workspace_path) || '';
+    const hit = path ? wsRegistry.items.filter(function (it) { return it.path === path; })[0] : null;
+    el.drawerWsText.textContent = '目录：' + (path ? ((hit ? hit.name + ' · ' : '') + path) : '默认');
+    el.drawerWsText.title = path || '';
+  }
+
+  function bindWorkspaces() {
+    if (el.btnWsChange) el.btnWsChange.addEventListener('click', function () { if (sid) wsSheetOpen('fork'); });
+    if (el.btnCloseWsSheet) el.btnCloseWsSheet.addEventListener('click', wsSheetClose);
+    if (el.wsSheet) el.wsSheet.addEventListener('click', function (e) {
+      if (e.target === el.wsSheet) wsSheetClose();     // 点遮罩关闭，同 modelSheet
+    });
+  }
+
+  /* ---------------- 会话生命周期 ---------------- */
+
+  async function newSession() {
+    // 多工作目录：先弹目录选择 sheet，选完才真正创建
+    wsSheetOpen('new');
+  }
+
   /* 方案 B（§11）：无会话时保证一个「可发送」的会话存在。顺序严格：
      创建 → 进入 → 刷新抽屉列表 → 等 WS 连上 → 设 manual，缺一不发第一条消息。
      后两步不可交换：后端新会话默认 acceptEdits（自动编辑），manual 未生效前
      首条消息会绕过 §10-D1 白名单。任一步失败即回滚到无会话态并把错误抛给调用方。 */
-  async function ensureSession() {
+  async function ensureSession(wsId) {
     try {
-      const data = await postJSON('/api/sessions');
+      const data = await postJSON('/api/sessions', wsId ? { workspace_id: wsId } : {});
       await enterSession(data.session_id);
       await loadSessions();
       if (!(await waitOpen(5000))) throw new Error('连接未就绪');
@@ -331,6 +413,9 @@
     try { localStorage.setItem(SID_KEY, id); } catch (e) { /* 存不下不影响本次 */ }
     clearMessages();
     picked = []; renderAttachBar();
+    // 文档面板跟随会话目录：切会话即重置，展开中的面板立刻按新目录重取
+    docTrail = ''; el.docsList.innerHTML = '';
+    if (!el.docsPane.classList.contains('hidden')) loadDocs();
     await loadHistory(id);
     await loadSettings(id);
     connect(id);
@@ -382,6 +467,7 @@
   /* 顶栏显示对话标题（与侧边栏同一数据源）。title 由后端在首条消息时生成，
      之前写死「对话 <sid前6位>」是调试期残留，用户看到一串 hex 无法辨识对话。 */
   function refreshHeader() {
+    renderDrawerWs();
     if (!sid) { el.sessionTitle.textContent = 'ZD Code'; return; }
     const me = sessionsCache.filter(function (s) { return s.id === sid; })[0];
     el.sessionTitle.textContent = (me && me.title) || '新对话';
@@ -791,7 +877,7 @@
 
   async function loadDocs() {
     try {
-      const d = await api('/api/browse?rel_path=' + encodeURIComponent(docTrail));
+      const d = await api('/api/browse?rel_path=' + encodeURIComponent(docTrail) + wsQS());
       renderDocs(d || {});
     } catch (e) {
       el.docsList.innerHTML = '<div class="docs-empty">读取失败：' + esc(e.message) + '</div>';
@@ -843,14 +929,14 @@
       const v = document.createElement('div');
       v.className = 'docs-viewer';
       const img = document.createElement('img');
-      img.src = API + '/api/projects/image?path=' + encodeURIComponent(path);
+      img.src = API + '/api/projects/image?path=' + encodeURIComponent(path) + wsQS();
       img.alt = path;
       v.appendChild(img);
       box.appendChild(v);
       return;
     }
     try {
-      const d = await api('/api/projects/content?path=' + encodeURIComponent(path));
+      const d = await api('/api/projects/content?path=' + encodeURIComponent(path) + wsQS());
       box.innerHTML = '';
       const v = document.createElement('div');
       v.className = 'docs-viewer';
@@ -923,6 +1009,7 @@
 
   async function startUp() {
     await loadModels();
+    await loadWorkspaces();
     await loadSessions();
     let last = '';
     try { last = localStorage.getItem(SID_KEY) || ''; } catch (e) {}
@@ -957,6 +1044,7 @@
     bindReconnect();
     bindOfflineBar();
     bindRename();
+    bindWorkspaces();
     setConn('idle');
     setGenerating(false);
     ensureLogin().then(function (ok) { if (ok) startUp(); });
