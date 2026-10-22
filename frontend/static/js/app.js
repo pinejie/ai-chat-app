@@ -98,7 +98,10 @@ function renderWorkspaceDir() {
 }
 
 /* 目录选择弹层：新建（mode='new'）与换目录（mode='fork'，带警示）复用 */
-function wsPickOpen(mode, cb) {
+async function wsPickOpen(mode, cb) {
+  // 注册表实时性：管理动作可能刚在另一个页面发生过，弹前先拉一次
+  await loadWorkspaces();
+  if (!wsRegistry.items.length) { addSystemMsg('工作目录列表为空，请先在侧栏「目录管理」新增'); return; }
   wsPickCb = cb;
   document.getElementById('wsPickTitle').textContent = mode === 'fork' ? '换目录（创建新对话）' : '新对话 · 选择工作目录';
   document.getElementById('wsPickWarn').style.display = mode === 'fork' ? '' : 'none';
