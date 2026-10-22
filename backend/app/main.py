@@ -12,10 +12,11 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 
 from dotenv import load_dotenv
-from fastapi import FastAPI, File, HTTPException, Request, Response, UploadFile, WebSocket, WebSocketDisconnect
+from fastapi import Body, FastAPI, File, HTTPException, Request, Response, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
+from app import workspace_registry as wsreg
 from app.claude_session import ClaudeSession
 from app.session_store import SessionStore
 
@@ -67,6 +68,8 @@ async def lifespan(app: FastAPI):
         raise RuntimeError("APP_TOKEN 未设置：请在 backend/.env 中配置访问口令后再启动")
     _ensure_data_dir()
     SessionStore._set_data_dir(DATA_DIR)
+    # 工作目录注册表：首次启动把旧全局 WORKSPACE_DIR 收编为默认条目（无缝迁移）
+    wsreg.ensure_registry(WORKSPACE_DIR)
     task = asyncio.create_task(_cleanup_expired_sessions())
     yield
     task.cancel()
@@ -147,15 +150,7 @@ def get_modes():
 
 # ─── Routes: Workspace ────────────────────────────────────────────────────────
 
-@app.post("/api/workspace")
-def update_workspace(body: dict):
-    global WORKSPACE_DIR
-    new_dir = body.get("workspace", "").strip()
-    if not new_dir:
-        raise HTTPException(400, "workspace is required")
-    new_dir = os.path.expanduser(new_dir)
-    WORKSPACE_DIR = new_dir
-
+def _write_env_workspace_dir(new_dir: str):
     lines = []
     if ENV_PATH.exists():
         with open(ENV_PATH, "r", encoding="utf-8") as f:
@@ -170,7 +165,89 @@ def update_workspace(body: dict):
         lines.append("WORKSPACE_DIR=" + new_dir + "\n")
     with open(ENV_PATH, "w", encoding="utf-8") as f:
         f.writelines(lines)
+
+
+@app.post("/api/workspace")
+def update_workspace(body: dict):
+    """【语义变更】设置默认工作目录。
+    旧版 PC 页面仍在调这个接口；现在只影响"以后新建的对话"用哪个目录，
+    不改变任何已有对话（每条对话保存了自己创建时的路径快照）。
+    .env 继续写入：保证服务重启后默认值不丢。"""
+    global WORKSPACE_DIR
+    new_dir = body.get("workspace", "").strip()
+    if not new_dir:
+        raise HTTPException(400, "workspace is required")
+    new_dir = os.path.abspath(os.path.expanduser(new_dir))
+    if not os.path.isdir(new_dir):
+        raise HTTPException(400, f"目录不存在：{new_dir}")
+    WORKSPACE_DIR = new_dir
+    _write_env_workspace_dir(new_dir)
+    try:
+        wsreg.update(wsreg.default_item()["id"], path=new_dir)
+    except (KeyError, ValueError):
+        pass
     return {"workspace": WORKSPACE_DIR}
+
+
+# ─── Routes: Workspace Registry ───────────────────────────────────────────────
+
+def _workspace_usage() -> dict:
+    counts = {}
+    for entry in SessionStore.load_index():
+        wid = entry.get("workspace_id")
+        if wid:
+            counts[wid] = counts.get(wid, 0) + 1
+    return counts
+
+
+@app.get("/api/workspaces")
+def list_workspaces():
+    items = wsreg.load()
+    counts = _workspace_usage()
+    return {
+        "items": [{**item, "usage": counts.get(item["id"], 0)} for item in items],
+        "default_id": (wsreg.default_item()["id"] if items else None),
+    }
+
+
+@app.post("/api/workspaces")
+def create_workspace(body: dict):
+    try:
+        return wsreg.add(body.get("name", ""), body.get("path", ""), bool(body.get("is_default")))
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+
+@app.put("/api/workspaces/{wid}")
+def modify_workspace(wid: str, body: dict):
+    try:
+        return wsreg.update(wid, name=body.get("name"), path=body.get("path"),
+                            is_default=body.get("is_default"))
+    except KeyError:
+        raise HTTPException(404, "工作目录不存在")
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+
+@app.delete("/api/workspaces/{wid}")
+def remove_workspace(wid: str):
+    try:
+        ok = wsreg.delete(wid, _workspace_usage().get(wid, 0))
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    if not ok:
+        raise HTTPException(404, "工作目录不存在")
+    return {"ok": True}
+
+
+def _session_workspace_path(session_id: str) -> str:
+    """对话创建时保存的路径快照；老对话/查不到 → 回退全局默认（升级兼容）。"""
+    if not session_id:
+        return WORKSPACE_DIR
+    for entry in SessionStore.load_index():
+        if entry["id"] == session_id:
+            return entry.get("workspace_path") or WORKSPACE_DIR
+    return WORKSPACE_DIR
 
 
 
@@ -193,8 +270,10 @@ async def upload_files(files: list[UploadFile] = File(...)):
 
 # ─── Routes: Sessions ─────────────────────────────────────────────────────────
 
-@app.post("/api/sessions")
-async def create_session():
+async def _make_new_session(ws: dict, title: str | None = None) -> dict:
+    """创建会话（内存 + 索引），并绑定工作目录快照。
+    缺省标题"新对话"由首条消息自动改名接管；显式标题（fork 副本）标记
+    manually_set，防止后续自动标题覆盖。"""
     index = SessionStore.load_index()
     while len(index) >= MAX_STORED_SESSIONS:
         oldest = index[-1]
@@ -206,10 +285,41 @@ async def create_session():
         index = SessionStore.load_index()
 
     session_id = str(uuid.uuid4())
-    sessions[session_id] = ClaudeSession(session_id, WORKSPACE_DIR)
-    title = "新对话"
-    SessionStore.add_to_index(session_id, title)
-    return {"session_id": session_id, "title": title}
+    sessions[session_id] = ClaudeSession(session_id, ws["path"])
+    title = title or "新对话"
+    SessionStore.add_to_index(session_id, title, ws["id"], ws["path"])
+    if title != "新对话":
+        SessionStore.update_title(session_id, title, manually_set=True)
+    return {"session_id": session_id, "title": title,
+            "workspace_id": ws["id"], "workspace_path": ws["path"]}
+
+
+def _resolve_workspace(body: dict | None) -> dict:
+    """请求指定了 workspace_id 就按它来；没指定/找不到都落默认目录（不静默报错，
+    新建流程不能因为注册表被并行改过而卡死）。"""
+    if body:
+        item = wsreg.get(str(body.get("workspace_id", "")))
+        if item:
+            return item
+    return wsreg.default_item()
+
+
+@app.post("/api/sessions")
+async def create_session(body: dict = Body(default=None)):
+    return await _make_new_session(_resolve_workspace(body))
+
+
+@app.post("/api/sessions/{session_id}/fork")
+async def fork_session(session_id: str, body: dict = Body(default=None)):
+    """换目录 = 在新目录建一个新对话（副本标题，不带聊天历史，AI 上下文全新开始）。
+    这不是偷懒，是 claude CLI 的物理事实：CLI 会话记录按项目目录存储，
+    换目录后 --resume 必然找不到旧会话。"""
+    src = next((e for e in SessionStore.load_index() if e["id"] == session_id), None)
+    if src is None:
+        raise HTTPException(404, "原对话不存在")
+    ws = _resolve_workspace(body)
+    src_title = src.get("title") or "新对话"
+    return await _make_new_session(ws, title=f"{src_title}（副本）")
 
 
 @app.get("/api/sessions")
@@ -317,7 +427,8 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str):
         return
     await websocket.accept()
     if session_id not in sessions:
-        sessions[session_id] = ClaudeSession(session_id, WORKSPACE_DIR)
+        # 服务重启后重连：按会话索引里的目录快照恢复，老数据无快照则回退默认目录
+        sessions[session_id] = ClaudeSession(session_id, _session_workspace_path(session_id))
     session = sessions[session_id]
     session.clients.add(websocket)
     session.touch()
@@ -363,11 +474,16 @@ def _validate_project_path(project_name: str, filename: str) -> Path:
 
 
 
-def _resolve_path(path: str) -> Path:
+def _project_root(session: str = "") -> Path:
+    """文档/项目 API 的根：跟随指定对话的工作目录快照；不带 session 用全局默认。"""
+    return Path(_session_workspace_path(session)) / "project"
+
+
+def _resolve_path(path: str, session: str = "") -> Path:
     """Resolve a path relative to project/ root. Validates no path traversal."""
     if '..' in path or '\\' in path:
         raise HTTPException(400, "Invalid path")
-    project_root = Path(WORKSPACE_DIR) / "project"
+    project_root = _project_root(session)
     file_path = project_root / path
     try:
         file_path.resolve().relative_to(project_root.resolve())
@@ -375,12 +491,12 @@ def _resolve_path(path: str) -> Path:
         raise HTTPException(400, "Invalid path")
     return file_path
 
-def _resolve_dir(dir: str) -> Path:
+def _resolve_dir(dir: str, session: str = "") -> Path:
     """Resolve a parent directory (relative to project/) and ensure it stays inside project/.
     注意：Path 的 `/` 遇到绝对路径会直接替换前缀，必须 resolve 后再校验。"""
     if '..' in dir or '\\' in dir:
         raise HTTPException(400, "Invalid directory path")
-    project_root = Path(WORKSPACE_DIR) / "project"
+    project_root = _project_root(session)
     target_dir = (project_root / dir) if dir else project_root
     try:
         target_dir.resolve().relative_to(project_root.resolve())
@@ -390,10 +506,10 @@ def _resolve_dir(dir: str) -> Path:
 
 
 @app.get("/api/browse")
-def browse_directory(rel_path: str = ""):
+def browse_directory(rel_path: str = "", session: str = ""):
     """Browse a directory under project/. Returns files + subdirectories.
     rel_path is relative to project/ root. Empty string = root."""
-    project_root = Path(WORKSPACE_DIR) / "project"
+    project_root = _project_root(session)
     if not project_root.exists():
         return {"files": [], "dirs": []}
 
@@ -418,8 +534,8 @@ def browse_directory(rel_path: str = ""):
 
 
 @app.get("/api/projects")
-def list_projects():
-    project_root = Path(WORKSPACE_DIR) / "project"
+def list_projects(session: str = ""):
+    project_root = _project_root(session)
     if not project_root.exists():
         return {}
     result = {}
@@ -435,9 +551,9 @@ def list_projects():
 
 
 @app.get("/api/projects/download")
-def download_project_file(path: str):
+def download_project_file(path: str, session: str = ""):
     """Download any project file as an attachment."""
-    file_path = _resolve_path(path)
+    file_path = _resolve_path(path, session)
     if not file_path.exists() or not file_path.is_file():
         raise HTTPException(404, "File not found")
     media_type = mimetypes.guess_type(file_path.name)[0] or "application/octet-stream"
@@ -445,17 +561,17 @@ def download_project_file(path: str):
 
 
 @app.get("/api/projects/content")
-def get_project_file_content(path: str):
-    file_path = _resolve_path(path)
+def get_project_file_content(path: str, session: str = ""):
+    file_path = _resolve_path(path, session)
     if not file_path.exists() or not file_path.is_file():
         raise HTTPException(404, "File not found")
     return {"filename": file_path.name, "content": file_path.read_text(encoding="utf-8", errors="replace")}
 
 
 @app.get("/api/projects/image")
-def get_project_image(path: str):
+def get_project_image(path: str, session: str = ""):
     """Serve an image file from a project directory (binary-safe)."""
-    file_path = _resolve_path(path)
+    file_path = _resolve_path(path, session)
     if not file_path.exists() or not file_path.is_file():
         raise HTTPException(404, "File not found")
     media_type = mimetypes.guess_type(file_path.name)[0] or "application/octet-stream"
@@ -463,8 +579,8 @@ def get_project_image(path: str):
 
 
 @app.put("/api/projects/content")
-def update_project_file(path: str, body: dict):
-    file_path = _resolve_path(path)
+def update_project_file(path: str, body: dict, session: str = ""):
+    file_path = _resolve_path(path, session)
     if not file_path.exists():
         raise HTTPException(404, "File not found")
     file_path.write_text(body.get("content", ""), encoding="utf-8")
@@ -472,10 +588,10 @@ def update_project_file(path: str, body: dict):
 
 
 @app.delete("/api/projects/content")
-def delete_project_file(path: str):
-    file_path = _resolve_path(path)
+def delete_project_file(path: str, session: str = ""):
+    file_path = _resolve_path(path, session)
     # 防止 path="" 或 "." 时 rmtree 整个 project/ 根目录
-    if file_path.resolve() == (Path(WORKSPACE_DIR) / "project").resolve():
+    if file_path.resolve() == _project_root(session).resolve():
         raise HTTPException(400, "Cannot delete project root")
     if not file_path.exists():
         raise HTTPException(404, "File not found")
@@ -487,7 +603,7 @@ def delete_project_file(path: str):
 
 
 @app.post("/api/projects/folder")
-def create_project_folder(dir: str = "", body: dict = None):
+def create_project_folder(dir: str = "", body: dict = None, session: str = ""):
     """Create a new folder. dir = parent directory relative to project/ root."""
     if '..' in dir or '\\' in dir:
         raise HTTPException(400, "Invalid directory path")
@@ -496,7 +612,7 @@ def create_project_folder(dir: str = "", body: dict = None):
         raise HTTPException(400, "name is required")
     if '..' in name or '/' in name or '\\' in name:
         raise HTTPException(400, "Invalid folder name")
-    target_dir = _resolve_dir(dir)
+    target_dir = _resolve_dir(dir, session)
     folder_path = target_dir / name
     if folder_path.exists():
         raise HTTPException(409, "Folder already exists")
@@ -505,7 +621,7 @@ def create_project_folder(dir: str = "", body: dict = None):
 
 
 @app.post("/api/projects/content")
-def create_project_file(dir: str = "", body: dict = None):
+def create_project_file(dir: str = "", body: dict = None, session: str = ""):
     """Create a new file. dir = relative directory path from project/ root."""
     filename = (body or {}).get("filename", "").strip()
     content_text = (body or {}).get("content", "")
@@ -515,7 +631,7 @@ def create_project_file(dir: str = "", body: dict = None):
         raise HTTPException(400, "Invalid filename")
     if not filename.endswith('.md'):
         filename += '.md'
-    target_dir = _resolve_dir(dir)
+    target_dir = _resolve_dir(dir, session)
     target_dir.mkdir(parents=True, exist_ok=True)
     file_path = target_dir / filename
     if file_path.exists():
@@ -538,9 +654,9 @@ def get_features():
 
 
 @app.get("/api/projects/preview")
-def preview_office_file(path: str):
+def preview_office_file(path: str, session: str = ""):
     """Convert an Office file (pptx/docx/xlsx) to PDF via LibreOffice and serve it."""
-    file_path = _resolve_path(path)
+    file_path = _resolve_path(path, session)
     if not file_path.exists() or not file_path.is_file():
         raise HTTPException(404, "File not found")
 
@@ -585,9 +701,9 @@ def preview_office_file(path: str):
 
 
 @app.get("/api/projects/slides")
-def list_slides(path: str):
+def list_slides(path: str, session: str = ""):
     """Return total slide count for a presentation, generating PNGs from PDF."""
-    file_path = _resolve_path(path)
+    file_path = _resolve_path(path, session)
     if not file_path.exists() or not file_path.is_file():
         raise HTTPException(404, "File not found")
 
@@ -650,11 +766,11 @@ def list_slides(path: str):
 
 
 @app.get("/api/projects/slide_page")
-def get_slide_page(path: str, page: int):
+def get_slide_page(path: str, page: int, session: str = ""):
     """Serve a single slide PNG (1-indexed)."""
     if page < 1:
         raise HTTPException(400, "page must be >= 1")
-    file_path = _resolve_path(path)
+    file_path = _resolve_path(path, session)
     slide_dir = SLIDE_CACHE_DIR / Path(path).parent / file_path.stem
     png_path = slide_dir / f"page_{page}.png"
     if not png_path.exists():

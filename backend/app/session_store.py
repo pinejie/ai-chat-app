@@ -42,7 +42,8 @@ class SessionStore:
         )
 
     @classmethod
-    def add_to_index(cls, session_id: str, title: str):
+    def add_to_index(cls, session_id: str, title: str,
+                     workspace_id: str | None = None, workspace_path: str | None = None):
         index = cls.load_index()
         entry = {
             "id": session_id,
@@ -50,6 +51,11 @@ class SessionStore:
             "created": int(time.time()),
             "last_active": int(time.time()),
         }
+        # workspace_path 是创建时的快照：之后注册表改名/改路径都不影响本对话
+        if workspace_id:
+            entry["workspace_id"] = workspace_id
+        if workspace_path:
+            entry["workspace_path"] = workspace_path
         index.insert(0, entry)
         cls.save_index(index)
 
