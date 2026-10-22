@@ -366,3 +366,26 @@ body{height:100vh;display:flex;background:var(--bg);color:var(--text);font-famil
 
 /* 模型 / 权限模式下拉框：统一外观 */
 .model-select,.mode-select{max-width:150px}
+
+/* ---- 多工作目录：侧栏按钮 + 选择/管理弹层 ---- */
+.ws-actions{display:flex;gap:6px;margin:4px 0 8px}
+.ws-act-btn{flex:1;padding:5px 0;border:1px solid var(--border2);background:var(--bg3);color:var(--text2);border-radius:6px;font-size:11px;cursor:pointer;font-family:inherit;transition:border-color .15s,color .15s}
+.ws-act-btn:hover{color:var(--text);border-color:var(--accent)}
+#workspaceDir{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.modal-warn{display:none;margin-bottom:10px;padding:8px 10px;border-radius:8px;background:rgba(245,158,11,.12);border:1px solid rgba(245,158,11,.4);color:var(--warn);font-size:12px;line-height:1.5}
+.ws-pick-list{max-height:300px;overflow:auto;display:flex;flex-direction:column;gap:4px}
+.ws-pick-item{display:flex;align-items:center;gap:8px;padding:8px 10px;border:1px solid var(--border);border-radius:8px;font-size:12px;color:var(--text);cursor:pointer}
+.ws-pick-item:hover{background:var(--bg3)}
+.ws-mgr-box{min-width:480px}
+.ws-mgr-list{display:flex;flex-direction:column;gap:6px;max-height:240px;overflow:auto;margin-bottom:14px}
+.ws-mgr-row{display:flex;align-items:center;gap:8px;padding:8px 10px;border:1px solid var(--border);border-radius:8px}
+.ws-mgr-main{flex:1;min-width:0}
+.ws-mgr-name{font-size:12px;color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.ws-mgr-path{font-size:11px;color:var(--text4);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.ws-mgr-usage{font-size:11px;color:var(--text4);flex:none}
+.ws-mgr-btn{flex:none;padding:5px 8px;font-size:11px;border:1px solid var(--border2);background:var(--bg3);color:var(--text2);border-radius:6px;cursor:pointer;font-family:inherit}
+.ws-mgr-btn:hover{color:var(--text)}
+.ws-mgr-btn.danger:hover{color:var(--danger2);border-color:var(--danger)}
+.ws-mgr-form{display:flex;flex-direction:column;gap:8px}
+.ws-mgr-default{font-size:12px;color:var(--text2);display:flex;align-items:center;gap:6px}
+.ws-mgr-error{min-height:16px;font-size:12px;color:var(--danger2)}

@@ -30,8 +30,12 @@
   <div class="sidebar-info">
     <div class="label">状态</div>
     <div class="value"><span class="status-dot off" id="statusDot"></span><span id="statusText">未连接</span><button id="reconnectBtn" class="reconnect-btn" onclick="reconnect()">重连</button></div>
-    <div class="label">工作目录</div>
-    <div class="value" id="workspaceDir" style="cursor:pointer" title="点击修改" onclick="editWorkspace()">-</div>
+    <div class="label">对话工作目录</div>
+    <div class="value" id="workspaceDir" title="">-</div>
+    <div class="ws-actions">
+      <button class="ws-act-btn" onclick="forkChat()">换目录</button>
+      <button class="ws-act-btn" onclick="wsMgrOpen()">目录管理</button>
+    </div>
     <div class="label">Session</div>
     <div class="value" id="sessionId">-</div>
   </div>
@@ -100,6 +104,36 @@
     <div class="modal-actions">
       <button class="cancel-btn" onclick="closeConfirm()">取消</button>
       <button class="confirm-btn danger" id="confirmBtn" onclick="confirmAction()">确认</button>
+    </div>
+  </div>
+</div>
+<!-- 工作目录：选择弹层（新建/fork 复用） -->
+<div class="modal-overlay" id="wsPickModal">
+  <div class="modal-box">
+    <div class="modal-title" id="wsPickTitle">选择工作目录</div>
+    <div class="modal-warn" id="wsPickWarn">换目录相当于在新目录创建一个新对话：AI 上下文重新开始，旧对话原样保留在列表里。</div>
+    <div class="ws-pick-list" id="wsPickList"></div>
+    <div class="modal-actions">
+      <button class="cancel-btn" onclick="wsPickClose()">取消</button>
+      <button class="confirm-btn" onclick="wsPickConfirm()">确定</button>
+    </div>
+  </div>
+</div>
+<!-- 工作目录：注册表管理弹层 -->
+<div class="modal-overlay" id="wsMgrModal">
+  <div class="modal-box ws-mgr-box">
+    <div class="modal-title">工作目录管理</div>
+    <div class="ws-mgr-list" id="wsMgrList"></div>
+    <div class="ws-mgr-form">
+      <input type="text" class="modal-input" id="wsMgrName" placeholder="名称（如：主工作区）">
+      <input type="text" class="modal-input" id="wsMgrPath" placeholder="绝对路径（/home/... 或 ~/...，目录必须已存在）">
+      <label class="ws-mgr-default"><input type="checkbox" id="wsMgrDefault">设为默认（新建对话预选此目录）</label>
+      <div class="ws-mgr-error" id="wsMgrError"></div>
+      <div class="modal-actions">
+        <button class="cancel-btn" id="wsMgrCancel" style="display:none" onclick="wsMgrCancelEdit()">取消编辑</button>
+        <button class="cancel-btn" onclick="wsMgrClose()">关闭</button>
+        <button class="confirm-btn" id="wsMgrSave" onclick="wsMgrSave()">新增</button>
+      </div>
     </div>
   </div>
 </div>

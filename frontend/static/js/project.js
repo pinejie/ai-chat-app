@@ -34,7 +34,7 @@ let currentFolder = '';
  */
 async function loadProjects() {
   try {
-    const data = await (await fetch(API + '/api/browse?rel_path=')).json();
+    const data = await (await fetch(API + '/api/browse?rel_path=' + sessionQS())).json();
     renderProjectTree(data);
   } catch (err) {
     console.error('Failed to load projects:', err);
@@ -97,7 +97,7 @@ function createFolderNode(dirName, dirRelPath, projectName, depth) {
       // Lazy load children
       loaded = true;
       childrenEl.innerHTML = '<div class="proj-loading" style="padding:6px 12px 6px ' + (28 + depth * 16) + 'px;font-size:11px;color:var(--text4)">加载中...</div>';
-      fetch(API + '/api/browse?rel_path=' + encodeURIComponent(dirRelPath))
+      fetch(API + '/api/browse?rel_path=' + encodeURIComponent(dirRelPath) + sessionQS())
         .then(r => r.json())
         .then(data => {
           childrenEl.innerHTML = '';
@@ -172,7 +172,7 @@ function refreshDir(dirRelPath) {
   const depth = parseInt(group.getAttribute('data-depth'), 10) || 0;
   const indent = (28 + depth * 16) + 'px';
   childrenEl.innerHTML = '<div class="proj-loading" style="padding:6px 12px 6px ' + indent + ';font-size:11px;color:var(--text4)">加载中...</div>';
-  fetch(API + '/api/browse?rel_path=' + encodeURIComponent(dirRelPath))
+  fetch(API + '/api/browse?rel_path=' + encodeURIComponent(dirRelPath) + sessionQS())
     .then(r => r.json())
     .then(data => {
       childrenEl.innerHTML = '';
@@ -268,12 +268,12 @@ function detectCodeLang(filename) {
 async function renderDocContent(data) {
   const inner = document.getElementById('docContentInner');
   if (isImageFile(data.filename)) {
-    inner.innerHTML = '<div class="doc-img-wrap"><img class="doc-img" src="' + API + '/api/projects/image?path=' + encodeURIComponent(currentDocPath) + '"></div>';
+    inner.innerHTML = '<div class="doc-img-wrap"><img class="doc-img" src="' + API + '/api/projects/image?path=' + encodeURIComponent(currentDocPath) + sessionQS() + '"></div>';
   } else if (isOfficeFile(data.filename)) {
     setFullscreenBtn(true);
     await renderOfficePreview(data);
   } else if (isBinaryFile(data.filename)) {
-    const dlUrl = API + '/api/projects/download?path=' + encodeURIComponent(currentDocPath);
+    const dlUrl = API + '/api/projects/download?path=' + encodeURIComponent(currentDocPath) + sessionQS();
     inner.innerHTML = '<div class="doc-binary-card">'
       + '<div class="doc-binary-icon">&#128230;</div>'
       + '<div class="doc-binary-name">' + escapeHtml(data.filename) + '</div>'
@@ -282,7 +282,7 @@ async function renderDocContent(data) {
       + '</div>';
   } else if (isPdfFile(data.filename)) {
     document.getElementById('docContentArea').classList.add('previewing');
-    inner.innerHTML = '<iframe class="doc-iframe" src="' + API + '/api/projects/image?path=' + encodeURIComponent(currentDocPath) + '"></iframe>';
+    inner.innerHTML = '<iframe class="doc-iframe" src="' + API + '/api/projects/image?path=' + encodeURIComponent(currentDocPath) + sessionQS() + '"></iframe>';
     setFullscreenBtn(true);
   } else if (isHtmlFile(data.filename)) {
     docHtmlSource = data.content;
@@ -352,7 +352,7 @@ async function openDocView(docPath) {
   document.getElementById('chatMain').style.display = 'none';
   document.getElementById('docView').classList.add('active');
   try {
-    const res = await fetch(API + '/api/projects/content?path=' + encodeURIComponent(docPath));
+    const res = await fetch(API + '/api/projects/content?path=' + encodeURIComponent(docPath) + sessionQS());
     const data = await res.json();
     await renderDocContent(data);
   } catch (err) {
@@ -380,7 +380,7 @@ async function renderOfficePreview(data) {
   const inner = document.getElementById('docContentInner');
   const contentArea = document.getElementById('docContentArea');
   const features = await getFeatures();
-  const dlUrl = API + '/api/projects/download?path=' + encodeURIComponent(currentDocPath);
+  const dlUrl = API + '/api/projects/download?path=' + encodeURIComponent(currentDocPath) + sessionQS();
 
   if (!features.libreoffice) {
     // Show install guide + download button
@@ -403,7 +403,7 @@ async function renderOfficePreview(data) {
   inner.innerHTML = '<div style="display:flex;align-items:center;justify-content:center;height:100%;color:var(--text3)">'
     + '<span>&#9203; 正在转换文件，请稍候...</span></div>';
 
-  const previewUrl = API + '/api/projects/preview?path=' + encodeURIComponent(currentDocPath);
+  const previewUrl = API + '/api/projects/preview?path=' + encodeURIComponent(currentDocPath) + sessionQS();
   try {
     const res = await fetch(previewUrl);
     if (!res.ok) {
@@ -448,7 +448,7 @@ async function openSlideViewer(docPath) {
   viewer.classList.add('active');
 
   try {
-    const res = await fetch(API + '/api/projects/slides?path=' + encodeURIComponent(docPath));
+    const res = await fetch(API + '/api/projects/slides?path=' + encodeURIComponent(docPath) + sessionQS());
     if (!res.ok) {
       const errData = await res.json().catch(() => ({}));
       throw new Error(errData.detail || '准备幻灯片失败 (' + res.status + ')');
@@ -457,7 +457,7 @@ async function openSlideViewer(docPath) {
     slideState.total = data.total;
     counterEl.textContent = '1 / ' + data.total;
     // Load first slide image
-    const firstUrl = API + '/api/projects/slide_page?path=' + encodeURIComponent(docPath) + '&page=1';
+    const firstUrl = API + '/api/projects/slide_page?path=' + encodeURIComponent(docPath) + '&page=1' + sessionQS();
     const img = document.getElementById('slideImg');
     img.onload = function() {
       body.style.display = 'flex';
@@ -483,7 +483,7 @@ function closeSlideViewer() {
 function goToSlide(page) {
   if (page < 1 || page > slideState.total) return;
   slideState.current = page;
-  var url = API + '/api/projects/slide_page?path=' + encodeURIComponent(slideState.docPath) + '&page=' + page;
+  var url = API + '/api/projects/slide_page?path=' + encodeURIComponent(slideState.docPath) + '&page=' + page + sessionQS();
   document.getElementById('slideImg').src = url;
   document.getElementById('slideViewerCounter').textContent = page + ' / ' + slideState.total;
   updateSlideNav();
@@ -525,7 +525,7 @@ function editDoc() {
   if (!currentDocPath || isEditing) return;
   isEditing = true;
   // Fetch raw content
-  fetch(API + '/api/projects/content?path=' + encodeURIComponent(currentDocPath))
+  fetch(API + '/api/projects/content?path=' + encodeURIComponent(currentDocPath) + sessionQS())
     .then(r => r.json())
     .then(data => {
       document.getElementById('docContentArea').style.display = 'none';
@@ -545,7 +545,7 @@ function cancelEdit() {
 function saveDoc() {
   if (!currentDocPath) return;
   const newContent = document.getElementById('docEditText').value;
-  fetch(API + '/api/projects/content?path=' + encodeURIComponent(currentDocPath), {
+  fetch(API + '/api/projects/content?path=' + encodeURIComponent(currentDocPath) + sessionQS(), {
     method: 'PUT',
     headers: {'Content-Type': 'application/json'},
     body: JSON.stringify({content: newContent})
@@ -560,7 +560,7 @@ function saveDoc() {
 }
 function downloadDoc() {
   if (!currentDocPath) return;
-  const dlUrl = API + '/api/projects/download?path=' + encodeURIComponent(currentDocPath);
+  const dlUrl = API + '/api/projects/download?path=' + encodeURIComponent(currentDocPath) + sessionQS();
   const a = document.createElement('a');
   a.href = dlUrl;
   a.download = currentDocPath.split('/').pop();
@@ -576,7 +576,7 @@ function deleteDoc() {
   const lastSlash = currentDocPath.lastIndexOf('/');
   const parentDir = (lastSlash >= 0) ? currentDocPath.substring(0, lastSlash) : '';
   if (!confirm('确定删除 ' + filename + '？此操作不可恢复。')) return;
-  fetch(API + '/api/projects/content?path=' + encodeURIComponent(currentDocPath), {
+  fetch(API + '/api/projects/content?path=' + encodeURIComponent(currentDocPath) + sessionQS(), {
     method: 'DELETE'
   })
   .then(r => { if(!r.ok) throw new Error('Delete failed'); return r.json(); })
@@ -599,7 +599,7 @@ function showNewFolderModal(dirPath) {
   document.getElementById('modalInput').value = '';
   document.getElementById('modalInput').placeholder = '输入文件夹名（如 03-设计方案）';
   modalCallback = function(folderName) {
-    fetch(API + '/api/projects/folder?dir=' + encodeURIComponent(dirPath), {
+    fetch(API + '/api/projects/folder?dir=' + encodeURIComponent(dirPath) + sessionQS(), {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
       body: JSON.stringify({name: folderName})
@@ -626,7 +626,7 @@ function showNewDocModal(dirPath) {
   modalCallback = function(filename) {
     const newFilename = filename.endsWith('.md') ? filename : filename + '.md';
     // Create file via /api/projects/content?dir=...
-    fetch(API + '/api/projects/content?dir=' + encodeURIComponent(dirPath), {
+    fetch(API + '/api/projects/content?dir=' + encodeURIComponent(dirPath) + sessionQS(), {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
       body: JSON.stringify({filename: filename, content: '# ' + filename.replace('.md','') + '\n'})
@@ -706,7 +706,7 @@ function enableRename(element, sessionId) {
   await ensureLogin();
   await loadModes();
   const list = await loadChatList();
-  try { const h = await fetch(API + '/api/health'); const hd = await h.json(); document.getElementById('workspaceDir').textContent = hd.workspace || '-'; } catch {}
+  await loadWorkspaces();   // 目录注册表先于任何目录展示加载（app.js）
   if (list.length > 0) await switchChat(list[0].id); else await newChat();
 })();
 
@@ -731,7 +731,7 @@ function projectDelete() {
   document.getElementById('confirmBtn').style.display = '';
   var folderName = currentFolder.split('/').pop();
   // 先查询文件夹内容
-  fetch(API + '/api/browse?rel_path=' + encodeURIComponent(currentFolder))
+  fetch(API + '/api/browse?rel_path=' + encodeURIComponent(currentFolder) + sessionQS())
   .then(function(r) { return r.json(); })
   .then(function(data) {
     var fileCount = data.files ? data.files.length : 0;
@@ -747,7 +747,7 @@ function projectDelete() {
       msg = '文件夹 "' + folderName + '" 下有' + parts.join('和') + '，确定要全部删除吗？';
     }
     showConfirm('确认删除', msg, function() {
-      fetch(API + '/api/projects/content?path=' + encodeURIComponent(currentFolder), { method: 'DELETE' })
+      fetch(API + '/api/projects/content?path=' + encodeURIComponent(currentFolder) + sessionQS(), { method: 'DELETE' })
       .then(function(r) { if(!r.ok) return r.json().then(function(d){ throw new Error(d.detail || 'failed'); }); return r.json(); })
       .then(function() {
         var folderPath = currentFolder;

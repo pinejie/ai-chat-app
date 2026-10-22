@@ -70,25 +70,149 @@ let streamingThinking = '';
 let currentAssistantEl = null;
 let isGenerating = false;
 
-// --- Workspace ---
-async function editWorkspace() {
-  const el = document.getElementById('workspaceDir');
-  if (el.querySelector('input')) return;
-  const current = el.textContent;
-  el.innerHTML = '';
-  const input = document.createElement('input');
-  input.type = 'text'; input.value = current;
-  input.style.cssText = 'width:100%;background:var(--bg3);border:1px solid var(--accent);border-radius:4px;padding:2px 6px;color:var(--text);font-size:12px;outline:none;font-family:inherit;box-sizing:border-box;';
-  el.appendChild(input); input.focus(); input.select();
-  async function save() {
-    const val = input.value.trim();
-    if (val && val !== current) {
-      try { const res = await fetch(API + '/api/workspace', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({workspace: val}) }); const data = await res.json(); el.textContent = data.workspace; updateConnectedUI(); return; } catch (err) { addSystemMsg('更新工作目录失败: ' + err.message); }
+// --- Workspace registry（多工作目录）---
+// 设计：目录集中在注册表，对话创建时绑定路径快照、之后不可改；
+// "换目录"= fork 出新目录的新对话。旧的 editWorkspace 直接改全局路径已废弃。
+let wsRegistry = { items: [], default_id: '' };
+let chatListCache = [];
+let wsPickCb = null;
+
+/* 文档/项目 API 跟随当前对话的目录 */
+function sessionQS() { return '&session=' + encodeURIComponent(currentSessionId || ''); }
+
+async function loadWorkspaces() {
+  try {
+    const res = await fetch(API + '/api/workspaces');
+    wsRegistry = await res.json();
+  } catch (e) { console.error('加载工作目录注册表失败:', e); }
+}
+
+function renderWorkspaceDir() {
+  const elx = document.getElementById('workspaceDir');
+  if (!elx) return;
+  const s = chatListCache.filter(function (c) { return c.id === currentSessionId; })[0];
+  const path = s && s.workspace_path ? s.workspace_path : '';
+  const hit = s ? wsRegistry.items.filter(function (it) { return it.path === path; })[0] : null;
+  elx.textContent = path ? ((hit ? hit.name + ' · ' : '') + path) : '（未选对话）';
+  elx.title = path || '';
+}
+
+/* 目录选择弹层：新建（mode='new'）与换目录（mode='fork'，带警示）复用 */
+function wsPickOpen(mode, cb) {
+  wsPickCb = cb;
+  document.getElementById('wsPickTitle').textContent = mode === 'fork' ? '换目录（创建新对话）' : '新对话 · 选择工作目录';
+  document.getElementById('wsPickWarn').style.display = mode === 'fork' ? '' : 'none';
+  const list = document.getElementById('wsPickList');
+  list.innerHTML = '';
+  wsRegistry.items.forEach(function (it) {
+    const label = document.createElement('label');
+    label.className = 'ws-pick-item';
+    const radio = document.createElement('input');
+    radio.type = 'radio'; radio.name = 'wsPick'; radio.value = it.id;
+    radio.checked = it.id === wsRegistry.default_id;
+    label.appendChild(radio);
+    const span = document.createElement('span');
+    span.textContent = it.name + '　' + it.path + (it.is_default ? '（默认）' : '');
+    label.appendChild(span);
+    list.appendChild(label);
+  });
+  document.getElementById('wsPickModal').classList.add('show');
+}
+function wsPickClose() { document.getElementById('wsPickModal').classList.remove('show'); wsPickCb = null; }
+async function wsPickConfirm() {
+  const sel = document.querySelector('input[name="wsPick"]:checked');
+  if (!sel) return;
+  const cb = wsPickCb; wsPickCb = null;
+  wsPickClose();
+  if (cb) await cb(sel.value);
+}
+
+/* 换目录 = 后端在新目录 fork 新对话（不带历史），完成后切过去 */
+function forkChat() {
+  if (!currentSessionId) return;
+  wsPickOpen('fork', async function (wsId) {
+    try {
+      const res = await fetch(API + '/api/sessions/' + currentSessionId + '/fork', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ workspace_id: wsId }),
+      });
+      if (!res.ok) { const d = await res.json().catch(function () { return {}; }); throw new Error(d.detail || res.status); }
+      const data = await res.json();
+      await loadChatList();
+      await switchChat(data.session_id);
+    } catch (e) { addSystemMsg('换目录失败: ' + e.message); }
+  });
+}
+
+/* 注册表管理：列表 + 新增/编辑/删除/设默认 */
+async function wsMgrOpen() { await loadWorkspaces(); renderWsMgr(); document.getElementById('wsMgrModal').classList.add('show'); }
+function wsMgrClose() { document.getElementById('wsMgrModal').classList.remove('show'); }
+
+function renderWsMgr() {
+  const box = document.getElementById('wsMgrList');
+  box.innerHTML = '';
+  wsRegistry.items.forEach(function (it) {
+    const row = document.createElement('div');
+    row.className = 'ws-mgr-row';
+    const main = document.createElement('div');
+    main.className = 'ws-mgr-main';
+    const nm = document.createElement('div'); nm.className = 'ws-mgr-name';
+    nm.textContent = it.name + (it.is_default ? '　★默认' : '');
+    const pth = document.createElement('div'); pth.className = 'ws-mgr-path'; pth.textContent = it.path;
+    main.appendChild(nm); main.appendChild(pth);
+    row.appendChild(main);
+    const usage = document.createElement('span'); usage.className = 'ws-mgr-usage';
+    usage.textContent = (it.usage || 0) + ' 对话';
+    row.appendChild(usage);
+    if (!it.is_default) {
+      const b0 = document.createElement('button'); b0.className = 'ws-mgr-btn'; b0.textContent = '设默认';
+      b0.onclick = function () { wsApi('PUT', it.id, { is_default: true }); };
+      row.appendChild(b0);
     }
-    el.textContent = current;
-  }
-  input.addEventListener('keydown', function(e) { if (e.key === 'Enter') { e.preventDefault(); save(); } if (e.key === 'Escape') { el.textContent = current; } });
-  input.addEventListener('blur', save);
+    const b2 = document.createElement('button'); b2.className = 'ws-mgr-btn'; b2.textContent = '编辑';
+    b2.onclick = function () { renderWsMgrForm(it); };
+    row.appendChild(b2);
+    const b3 = document.createElement('button'); b3.className = 'ws-mgr-btn danger'; b3.textContent = '删除';
+    b3.onclick = function () { wsApi('DELETE', it.id, null); };
+    row.appendChild(b3);
+    box.appendChild(row);
+  });
+  renderWsMgrForm(null);
+}
+
+function renderWsMgrForm(item) {
+  document.getElementById('wsMgrError').textContent = '';
+  document.getElementById('wsMgrName').value = item ? item.name : '';
+  document.getElementById('wsMgrPath').value = item ? item.path : '';
+  document.getElementById('wsMgrDefault').checked = item ? !!item.is_default : wsRegistry.items.length === 0;
+  const save = document.getElementById('wsMgrSave');
+  save.dataset.editId = item ? item.id : '';
+  save.textContent = item ? '保存修改' : '新增';
+  document.getElementById('wsMgrCancel').style.display = item ? '' : 'none';
+}
+function wsMgrCancelEdit() { renderWsMgrForm(null); }
+
+async function wsApi(method, id, body) {
+  const errEl = document.getElementById('wsMgrError');
+  errEl.textContent = '';
+  try {
+    const url = id ? API + '/api/workspaces/' + id : API + '/api/workspaces';
+    const res = await fetch(url, { method: method, headers: { 'Content-Type': 'application/json' }, body: body ? JSON.stringify(body) : undefined });
+    if (!res.ok) { const d = await res.json().catch(function () { return {}; }); throw new Error(typeof d.detail === 'string' ? d.detail : 'HTTP ' + res.status); }
+    await loadWorkspaces();
+    renderWsMgr();
+    renderWorkspaceDir();
+  } catch (e) { errEl.textContent = e.message; }
+}
+
+function wsMgrSave() {
+  const editId = document.getElementById('wsMgrSave').dataset.editId;
+  const body = {
+    name: document.getElementById('wsMgrName').value,
+    path: document.getElementById('wsMgrPath').value,
+    is_default: document.getElementById('wsMgrDefault').checked,
+  };
+  if (editId) wsApi('PUT', editId, body); else wsApi('POST', null, body);
 }
 
 // scrollBottom — scoped to currentCtx

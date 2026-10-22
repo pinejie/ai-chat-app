@@ -202,7 +202,9 @@ async function loadChatList() {
   const res = await fetch(API + '/api/sessions');
   const list = await res.json();
   refreshSessionSettings(list);
+  chatListCache = list;
   renderChatList(list);
+  renderWorkspaceDir();
   return list;
 }
 
@@ -223,6 +225,7 @@ function renderChatList(list) {
     div.innerHTML = '';
     div.appendChild(titleSpan);
     div.appendChild(delSpan);
+    div.title = item.workspace_path || '默认目录';   // 悬停可见每条对话的目录
     div.onclick = () => switchChat(item.id);
     el.appendChild(div);
   }
@@ -245,6 +248,11 @@ async function deleteChat(sessionId) {
 // --- Session Management ---
 
 async function newChat() {
+  // 多工作目录：创建前先弹目录选择（默认项预选），确认后才真正建对话
+  wsPickOpen('new', createSessionWith);
+}
+
+async function createSessionWith(workspaceId) {
   // Save current state
   if (currentCtx) {
     currentCtx.isGenerating = isGenerating;
@@ -260,13 +268,19 @@ async function newChat() {
   streamingText = ''; streamingThinking = ''; isGenerating = false; currentAssistantEl = null;
 
   try {
-    const res = await fetch(API + '/api/sessions', { method: 'POST' });
+    const res = await fetch(API + '/api/sessions', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ workspace_id: workspaceId }),
+    });
     const data = await res.json();
     switchCtx(data.session_id);
     currentCtx.historyLoaded = true; // New session, no history to load
     document.getElementById('sessionId').textContent = currentSessionId.slice(0, 8) + '...';
     connectWS();
     await loadChatList();
+    renderWorkspaceDir();
+    loadProjects();   // 文档面板跟随新对话的目录
   } catch (err) {
     addSystemMsg('创建对话失败: ' + err.message);
   }
@@ -280,6 +294,8 @@ async function switchChat(sessionId) {
 
   // Update sidebar
   document.getElementById('sessionId').textContent = sessionId.slice(0, 8) + '...';
+  renderWorkspaceDir();
+  loadProjects();   // 文档面板跟随当前对话的目录
 
   // Reset shared resources
   selectedFiles = [];
