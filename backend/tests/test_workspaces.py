@@ -154,7 +154,28 @@ class WorkspaceTests(unittest.TestCase):
         self.assertTrue(f2["forked"])
         self.assertNotEqual(f2["session_id"], s["session_id"])
 
-    # ---- 文档 API 跟随会话目录 ----
+    # ---- 列表排序（顺序稳定契约：只认 created，查看/重连不跳位） ----
+
+    def test_sessions_list_sorted_by_created_regardless_of_file_order(self):
+        a = self.client.post("/api/sessions", json={}).json()["session_id"]
+        b = self.client.post("/api/sessions", json={}).json()["session_id"]
+        c = self.client.post("/api/sessions", json={}).json()["session_id"]
+        by_id = {e["id"]: e for e in SessionStore.load_index()}
+        for sid, ts in ((a, 100), (b, 300), (c, 200)):
+            by_id[sid]["created"] = ts
+        SessionStore.save_index([by_id[a], by_id[b], by_id[c]])  # 故意按 created 乱序落盘
+        ids = [e["id"] for e in self.client.get("/api/sessions").json()]
+        self.assertEqual(ids[:3], [b, c, a])                     # 读出仍恒为 created 降序
+
+    def test_touch_does_not_reorder_index(self):
+        a = self.client.post("/api/sessions", json={}).json()["session_id"]
+        b = self.client.post("/api/sessions", json={}).json()["session_id"]
+        before = [e["id"] for e in SessionStore.load_index()]
+        sess = app_main.sessions.get(b)
+        self.assertIsNotNone(sess)
+        sess.touch()                                             # 模拟打开/重连时的 touch
+        self.assertEqual([e["id"] for e in SessionStore.load_index()], before)
+        self.assertEqual(a, before[1])                           # touch 后 b 也没被插到最前
 
     def test_projects_api_follows_session(self):
         ws1, d1 = self._add_dir("ws-f")

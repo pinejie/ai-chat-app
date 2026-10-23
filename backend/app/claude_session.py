@@ -264,8 +264,9 @@ class ClaudeSession:
         self._last_error_text: str = ""
 
     def touch(self):
+        # 只刷内存 monotonic 时间供回收器 TTL 用，不写会话索引——
+        # 列表顺序只认 created，点开看一眼不该让对话跳位。
         self.last_active = time.monotonic()
-        SessionStore.touch_index(self.id)
 
     async def send_and_stream(self, text: str, files: list[str] = None):
         """Send message to Claude Code and stream output to WebSocket.

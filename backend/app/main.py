@@ -333,7 +333,10 @@ async def fork_session(session_id: str, body: dict = Body(default=None)):
 
 @app.get("/api/sessions")
 def list_sessions():
-    return SessionStore.load_index()
+    # 顺序稳定契约：只按 created 降序（新的在前），创建后永不挪位；
+    # 查看/切换/重连不再写索引（touch 只刷内存 TTL 时间）。同秒新建按稳定排序
+    # 保留文件序，而文件里新条目恒插在最前，所以同秒也是新在前。
+    return sorted(SessionStore.load_index(), key=lambda e: e.get("created", 0), reverse=True)
 
 
 @app.get("/api/sessions/{session_id}/history")

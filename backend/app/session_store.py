@@ -131,30 +131,14 @@ class SessionStore:
         return False
 
     @classmethod
-    def get_last_active(cls, session_id: str) -> int:
-        index = cls.load_index()
-        for entry in index:
-            if entry["id"] == session_id:
-                return entry.get("last_active", 0)
-        return 0
-
-    @classmethod
     def get_last_message_ts(cls, session_id: str) -> int:
         history = cls.read_history(session_id)
         if history:
             return history[-1].get("ts", 0)
         return 0
 
-    @classmethod
-    def touch_index(cls, session_id: str):
-        index = cls.load_index()
-        for entry in index:
-            if entry["id"] == session_id:
-                entry["last_active"] = int(time.time())
-                index.remove(entry)
-                index.insert(0, entry)
-                break
-        cls.save_index(index)
+    # touch_index / get_last_active 已删除：列表顺序改由 /api/sessions 按 created
+    # 稳定排序，任何「活跃」写入都不该再动索引条目位置（点开看一眼不许让对话跳位）。
 
     @classmethod
     def remove_from_index(cls, session_id: str):
