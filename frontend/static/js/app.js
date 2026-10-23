@@ -107,15 +107,19 @@ async function wsPickOpen(mode, cb) {
   document.getElementById('wsPickWarn').style.display = mode === 'fork' ? '' : 'none';
   const list = document.getElementById('wsPickList');
   list.innerHTML = '';
+  // 换目录弹层：预选并标注当前对话所在目录，点同目录不算换
+  const curS = mode === 'fork' ? chatListCache.filter(function (c) { return c.id === currentSessionId; })[0] : null;
+  const curWsId = curS && curS.workspace_id ? curS.workspace_id : '';
   wsRegistry.items.forEach(function (it) {
     const label = document.createElement('label');
     label.className = 'ws-pick-item';
     const radio = document.createElement('input');
     radio.type = 'radio'; radio.name = 'wsPick'; radio.value = it.id;
-    radio.checked = it.id === wsRegistry.default_id;
+    radio.checked = mode === 'fork' && curWsId ? it.id === curWsId : it.id === wsRegistry.default_id;
     label.appendChild(radio);
     const span = document.createElement('span');
-    span.textContent = it.name + '　' + it.path + (it.is_default ? '（默认）' : '');
+    span.textContent = it.name + '　' + it.path
+      + (it.is_default ? '（默认）' : '') + (mode === 'fork' && curWsId && it.id === curWsId ? '（当前）' : '');
     label.appendChild(span);
     list.appendChild(label);
   });
@@ -130,10 +134,15 @@ async function wsPickConfirm() {
   if (cb) await cb(sel.value);
 }
 
-/* 换目录 = 后端在新目录 fork 新对话（不带历史），完成后切过去 */
+/* 换目录 = 后端在新目录 fork 新对话（不带历史），完成后切过去；目录没变则只提示不复制 */
 function forkChat() {
   if (!currentSessionId) return;
   wsPickOpen('fork', async function (wsId) {
+    const curS = chatListCache.filter(function (c) { return c.id === currentSessionId; })[0];
+    if (curS && curS.workspace_id && curS.workspace_id === wsId) {
+      addSystemMsg('目录未变化，无需换目录');
+      return;
+    }
     try {
       const res = await fetch(API + '/api/sessions/' + currentSessionId + '/fork', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -141,6 +150,7 @@ function forkChat() {
       });
       if (!res.ok) { const d = await res.json().catch(function () { return {}; }); throw new Error(d.detail || res.status); }
       const data = await res.json();
+      if (data.forked === false) { addSystemMsg('目录未变化，无需换目录'); return; }
       await loadChatList();
       await switchChat(data.session_id);
     } catch (e) { addSystemMsg('换目录失败: ' + e.message); }

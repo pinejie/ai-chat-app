@@ -123,9 +123,36 @@ class WorkspaceTests(unittest.TestCase):
         f = self.client.post("/api/sessions/%s/fork" % s["session_id"],
                              json={"workspace_id": ws2["id"]}).json()
         entries = {e["id"]: e for e in self.client.get("/api/sessions").json()}
+        self.assertTrue(f["forked"])
         self.assertTrue(entries[f["session_id"]]["title"].endswith("（副本）"))
         self.assertEqual(entries[f["session_id"]]["workspace_path"], ws2["path"])
         self.assertEqual(entries[s["session_id"]]["workspace_path"], str(self.default_ws))
+
+    def test_fork_same_workspace_does_not_copy(self):
+        ws2, _ = self._add_dir("ws-g")
+        s = self.client.post("/api/sessions", json={"workspace_id": ws2["id"]}).json()
+        f = self.client.post("/api/sessions/%s/fork" % s["session_id"],
+                             json={"workspace_id": ws2["id"]}).json()
+        self.assertFalse(f["forked"])
+        self.assertEqual(f["session_id"], s["session_id"])
+        entries = self.client.get("/api/sessions").json()
+        self.assertEqual(len(entries), 1)  # 没产生副本
+        self.assertFalse(any(e["title"].endswith("（副本）") for e in entries))
+
+    def test_fork_legacy_session_falls_back_to_path(self):
+        # 旧会话索引里没有 workspace_id，换目录比较退化为路径快照
+        s = self.client.post("/api/sessions", json={}).json()  # 默认目录
+        idx = SessionStore.load_index()
+        next(e for e in idx if e["id"] == s["session_id"]).pop("workspace_id")
+        SessionStore.save_index(idx)
+        f = self.client.post("/api/sessions/%s/fork" % s["session_id"], json={}).json()
+        self.assertFalse(f["forked"])
+        self.assertEqual(f["session_id"], s["session_id"])
+        ws2, _ = self._add_dir("ws-h")
+        f2 = self.client.post("/api/sessions/%s/fork" % s["session_id"],
+                              json={"workspace_id": ws2["id"]}).json()
+        self.assertTrue(f2["forked"])
+        self.assertNotEqual(f2["session_id"], s["session_id"])
 
     # ---- 文档 API 跟随会话目录 ----
 

@@ -313,13 +313,22 @@ async def create_session(body: dict = Body(default=None)):
 async def fork_session(session_id: str, body: dict = Body(default=None)):
     """换目录 = 在新目录建一个新对话（副本标题，不带聊天历史，AI 上下文全新开始）。
     这不是偷懒，是 claude CLI 的物理事实：CLI 会话记录按项目目录存储，
-    换目录后 --resume 必然找不到旧会话。"""
+    换目录后 --resume 必然找不到旧会话。
+    目录没变则不复制：原样返回原会话并标记 forked=False（返回结构兼容老客户端）。"""
     src = next((e for e in SessionStore.load_index() if e["id"] == session_id), None)
     if src is None:
         raise HTTPException(404, "原对话不存在")
     ws = _resolve_workspace(body)
+    if src.get("workspace_id"):
+        unchanged = src["workspace_id"] == ws["id"]
+    else:
+        # 旧会话没记注册表 id，退而比较创建时的路径快照
+        unchanged = src.get("workspace_path") == ws["path"]
+    if unchanged:
+        return {**src, "session_id": src["id"], "forked": False}
     src_title = src.get("title") or "新对话"
-    return await _make_new_session(ws, title=f"{src_title}（副本）")
+    new_sess = await _make_new_session(ws, title=f"{src_title}（副本）")
+    return {**new_sess, "forked": True}
 
 
 @app.get("/api/sessions")

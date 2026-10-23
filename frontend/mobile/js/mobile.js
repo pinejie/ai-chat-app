@@ -284,20 +284,27 @@
     el.wsSheetTitle.textContent = mode === 'fork' ? '换目录（创建新对话）' : '新建对话 · 选择工作目录';
     el.wsSheetWarn.classList.toggle('hidden', mode !== 'fork');
     el.wsSheetList.innerHTML = '';
+    // 换目录弹层：标注当前目录，点同目录不算换、不复制
+    const curS = mode === 'fork' ? sessionsCache.filter(function (s) { return s.id === sid; })[0] : null;
+    const curWsId = curS && curS.workspace_id ? curS.workspace_id : '';
     wsRegistry.items.forEach(function (it) {
       const b = document.createElement('button');
       b.type = 'button';
       b.className = 'ws-option' + (it.id === wsRegistry.default_id ? ' default' : '');
       const nm = document.createElement('span');
       nm.className = 'ws-option-name';
-      nm.textContent = it.name + (it.is_default ? '（默认）' : '');
+      nm.textContent = it.name + (it.is_default ? '（默认）' : '')
+        + (mode === 'fork' && curWsId && it.id === curWsId ? '（当前）' : '');
       const pt = document.createElement('span');
       pt.className = 'ws-option-path ellipsis';
       pt.textContent = it.path;
       b.appendChild(nm); b.appendChild(pt);
       b.addEventListener('click', function () {
         wsSheetClose();
-        if (mode === 'fork') { forkSession(it.id); } else { newSessionIn(it.id); }
+        if (mode === 'fork') {
+          if (curWsId && it.id === curWsId) { MUI.toast('当前对话已是该目录，无需换目录'); return; }
+          forkSession(it.id);
+        } else { newSessionIn(it.id); }
       });
       el.wsSheetList.appendChild(b);
     });
@@ -320,6 +327,7 @@
     if (!sid) return;
     try {
       const data = await postJSON('/api/sessions/' + sid + '/fork', { workspace_id: wsId });
+      if (data.forked === false) { MUI.toast('目录未变化，无需换目录'); return; }
       await enterSession(data.session_id);
       await loadSessions();
       MUI.setDrawer(false);
