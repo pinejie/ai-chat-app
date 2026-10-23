@@ -126,6 +126,13 @@ async function wsPickOpen(mode, cb) {
   document.getElementById('wsPickModal').classList.add('show');
 }
 function wsPickClose() { document.getElementById('wsPickModal').classList.remove('show'); wsPickCb = null; }
+// 目录选择弹层：点遮罩或按 Escape 关闭，行为对齐确认弹窗
+document.getElementById('wsPickModal').addEventListener('click', function(e) {
+  if (e.target.id === 'wsPickModal') wsPickClose();
+});
+document.addEventListener('keydown', function(e) {
+  if (e.key === 'Escape' && document.getElementById('wsPickModal').classList.contains('show')) wsPickClose();
+});
 async function wsPickConfirm() {
   const sel = document.querySelector('input[name="wsPick"]:checked');
   if (!sel) return;

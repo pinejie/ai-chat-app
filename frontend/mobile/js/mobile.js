@@ -35,6 +35,7 @@
   let sessionsCache = [];                // 校验 localStorage 里的旧 sid 是否仍存在
   let docTrail = '';                     // 文档浏览器当前相对路径
   let renameTargetId = '';               // 重命名弹层当前针对的会话 id
+  let delTargetId = '';                  // 删除确认弹层当前针对的会话 id
   let wsRegistry = { items: [], default_id: '' };   // 工作目录注册表（GET /api/workspaces）
 
   /* ---------------- 文本渲染 ---------------- */
@@ -95,6 +96,8 @@
     connected = false;
     setConn('err');
     MUI.setRenameVisible(false);       // 改名弹层压在登录页下面会显得页面坏了
+    delTargetId = '';
+    if (el.delOverlay) el.delOverlay.classList.add('hidden');   // 同上，删除弹层也不能留在登录页底下
     MUI.setLoginVisible(true);
     MUI.toast('口令已失效，请重新登录', true);
   }
@@ -180,7 +183,7 @@
     }
     let lastGroup = '';
     for (const item of list) {
-      const g = dayLabel(item.updated_at);
+      const g = dayLabel(item.created);   // 索引里没有 updated_at；按创建时间与列表排序语义一致（updated_at 恒 undefined，分组全落「更早」的老 bug 一并修掉）
       if (g !== lastGroup) {
         lastGroup = g;
         const h = document.createElement('div');
@@ -209,6 +212,16 @@
       openRename(item);
     });
     row.appendChild(pen);
+    const del = document.createElement('button');
+    del.className = 'session-del';
+    del.type = 'button';
+    del.setAttribute('aria-label', '删除「' + (item.title || '新对话') + '」');
+    del.textContent = '✕';
+    del.addEventListener('click', function (e) {
+      e.stopPropagation();               // 同上
+      openDelete(item);                  // 不直删：触屏误触率高，弹确认卡
+    });
+    row.appendChild(del);
     row.addEventListener('click', function () { openSession(item.id); });
     return row;
   }
@@ -259,6 +272,46 @@
     });
     if (el.renameOverlay) el.renameOverlay.addEventListener('click', function (e) {
       if (e.target === el.renameOverlay) MUI.setRenameVisible(false);   // 点遮罩关闭，同 sheet
+    });
+  }
+
+  /* ---------------- 删除会话 ----------------
+     行内 ✕ 按钮触发（sessionRow），确认卡里才真删——触屏误触率高，不可逆操作必须二确。
+     后端 DELETE 负责停进程、删历史文件和索引，前端只管善后本地状态。 */
+
+  function openDelete(item) {
+    delTargetId = item.id;
+    el.delText.textContent = '删除对话「' + (item.title || '新对话') + '」？删除后不可恢复。';
+    el.delOverlay.classList.remove('hidden');
+  }
+
+  function closeDelete() {
+    delTargetId = '';
+    el.delOverlay.classList.add('hidden');
+  }
+
+  async function doDelete() {
+    if (!delTargetId) return;
+    const id = delTargetId;
+    closeDelete();
+    try {
+      await api('/api/sessions/' + id, { method: 'DELETE' });
+    } catch (e) { MUI.toast('删除失败：' + e.message, true); return; }
+    await loadSessions();
+    if (id === sid) {                        // 删的是当前会话：落到列表第一个；列表空了回无会话态
+      const next = sessionsCache[0];
+      if (next) { await enterSession(next.id); await enforceModeWhitelist(next.id, true); }
+      else { teardown(); MUI.setEmptyVisible(true); refreshHeader(); }
+    }
+    MUI.toast('已删除');
+  }
+
+  function bindDelete() {
+    if (!el.btnDelConfirm) return;
+    el.btnDelConfirm.addEventListener('click', doDelete);
+    el.btnDelCancel.addEventListener('click', closeDelete);
+    if (el.delOverlay) el.delOverlay.addEventListener('click', function (e) {
+      if (e.target === el.delOverlay) closeDelete();   // 点遮罩关闭，同改名弹层
     });
   }
 
@@ -1052,6 +1105,7 @@
     bindReconnect();
     bindOfflineBar();
     bindRename();
+    bindDelete();
     bindWorkspaces();
     setConn('idle');
     setGenerating(false);

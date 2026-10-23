@@ -32,6 +32,8 @@
     offlineBar: $('offlineBar'), offlineText: $('offlineText'), btnReconnect: $('btnReconnect'),
     renameOverlay: $('renameOverlay'), renameInput: $('renameInput'), renameError: $('renameError'),
     btnRenameCancel: $('btnRenameCancel'), btnRenameSave: $('btnRenameSave'),
+    delOverlay: $('delOverlay'), delText: $('delText'),
+    btnDelCancel: $('btnDelCancel'), btnDelConfirm: $('btnDelConfirm'),
     drawerWs: $('drawerWs'), drawerWsText: $('drawerWsText'), btnWsChange: $('btnWsChange'),
     wsSheet: $('wsSheet'), wsSheetTitle: $('wsSheetTitle'), wsSheetWarn: $('wsSheetWarn'),
     wsSheetList: $('wsSheetList'), btnCloseWsSheet: $('btnCloseWsSheet'),

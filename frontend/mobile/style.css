@@ -214,11 +214,16 @@ hr{border:none;border-top:1px solid var(--border);margin:12px 0}
 .session-item:active{background:var(--bg3)}
 .session-item.active{background:var(--bg3);color:var(--text);border-left-color:var(--accent2)}
 .session-item-title{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-/* 行内重命名按钮：44px 命中区（R6），靠右贴边由行 padding 让位 */
+/* 行内重命名按钮：44px 命中区（R6） */
 .session-rename{flex:none;width:44px;height:44px;display:inline-flex;align-items:center;justify-content:center;
   border:none;background:transparent;color:var(--text5);font-size:17px;cursor:pointer;
-  border-radius:var(--radius-sm);font-family:inherit;margin-right:-8px}
+  border-radius:var(--radius-sm);font-family:inherit}
 .session-rename:active{background:var(--bg4);color:var(--text)}
+/* 行内删除按钮：与改名同 44px 命中区，靠右贴边由行 padding 让位；按下变红提示破坏性操作 */
+.session-del{flex:none;width:44px;height:44px;display:inline-flex;align-items:center;justify-content:center;
+  border:none;background:transparent;color:var(--text5);font-size:15px;cursor:pointer;
+  border-radius:var(--radius-sm);font-family:inherit;margin-right:-8px}
+.session-del:active{background:var(--bg4);color:var(--danger)}
 .session-date{font-size:10.5px;color:var(--text5);font-family:var(--font-mono);padding:8px 12px 4px}
 
 .docs-pane{padding:4px 0 8px}
@@ -258,18 +263,37 @@ hr{border:none;border-top:1px solid var(--border);margin:12px 0}
   padding:12px 8px;cursor:pointer;font-family:inherit}
 .login-error{min-height:18px;font-size:13px;color:var(--danger2);text-align:center}
 
-/* ---- 重命名弹层：遮罩 + 居中卡片；z 62 高于抽屉(40)低于 toast(70) ---- */
+/* ---- 重命名/删除弹层：遮罩 + 居中卡片；z 62 高于抽屉(40)低于 toast(70) ---- */
 .rename-overlay{position:fixed;inset:0;z-index:62;background:rgba(0,0,0,.55);
+  backdrop-filter:blur(3px);-webkit-backdrop-filter:blur(3px);
   display:flex;align-items:center;justify-content:center;padding:20px}
+/* .hidden 是 display:none，摘掉类即重新触发进场动画（与 PC modal 同款做法） */
+.rename-overlay:not(.hidden){animation:fade-in .16s ease both}
+.rename-overlay:not(.hidden) .rename-card{animation:pop-in .18s ease both}
+@keyframes fade-in{from{opacity:0}to{opacity:1}}
+@keyframes pop-in{from{opacity:0;transform:scale(.96) translateY(4px)}to{opacity:1;transform:none}}
+@keyframes sheet-up{from{transform:translateY(24px);opacity:0}to{transform:none;opacity:1}}
 .rename-card{width:min(340px,100%);background:var(--bg2);border:1px solid var(--border);
   border-radius:16px;padding:18px;display:flex;flex-direction:column;gap:12px;box-shadow:var(--shadow-md)}
-.rename-title{font-size:15px;font-weight:600;color:var(--text);text-align:center}
+.rename-title{font-size:16px;font-weight:600;color:var(--text);text-align:center}
 .rename-row{display:flex;align-items:center;gap:10px}
-.rename-row .link-btn{flex:none;padding:12px 14px;color:var(--text3)}
+/* 取消钮等宽描边、与实心确认钮同 48px，两个分得清晰；只作用于弹层行，不影响登录行的小「显示」 */
+.rename-row .link-btn{flex:1;height:48px;padding:0;border:1px solid var(--border2);
+  border-radius:12px;background:transparent;color:var(--text2);font-size:15px;font-family:inherit}
+.rename-row .link-btn:active{background:var(--bg3)}
+
+/* ---- 删除确认弹层：复用改名弹层结构，只加文案与危险按钮 ---- */
+.del-text{font-size:14px;color:var(--text2);text-align:center;line-height:1.6;word-break:break-all}
+.btn-danger{flex:1;height:48px;border:none;border-radius:12px;background:var(--danger);
+  color:#fff;font-size:15px;font-weight:600;cursor:pointer;font-family:inherit}
+.btn-danger:active{background:var(--danger2)}
 
 /* ---- 模型弹层（底部抽屉式，贴合触屏） ---- */
 .sheet{position:fixed;inset:0;z-index:55;background:rgba(0,0,0,.5);
+  backdrop-filter:blur(3px);-webkit-backdrop-filter:blur(3px);
   display:flex;align-items:flex-end;justify-content:center}
+.sheet:not(.hidden){animation:fade-in .16s ease both}
+.sheet:not(.hidden) .sheet-panel{animation:sheet-up .22s ease both}
 .sheet-panel{width:100%;max-width:680px;background:var(--bg2);
   border-radius:18px 18px 0 0;padding:14px 16px calc(14px + env(safe-area-inset-bottom));
   border:1px solid var(--border);border-bottom:none}

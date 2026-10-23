@@ -781,3 +781,11 @@ function confirmAction() {
   if (_confirmCallback) _confirmCallback();
   closeConfirm();
 }
+
+// 确认弹窗：点遮罩或按 Escape 关闭，行为对齐新建文档弹层（modalOverlay 已有同款）
+document.getElementById('confirmOverlay').addEventListener('click', function(e) {
+  if (e.target.id === 'confirmOverlay') closeConfirm();
+});
+document.addEventListener('keydown', function(e) {
+  if (e.key === 'Escape' && document.getElementById('confirmOverlay').classList.contains('show')) closeConfirm();
+});

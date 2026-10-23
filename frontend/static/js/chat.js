@@ -221,7 +221,12 @@ function renderChatList(list) {
     const delSpan = document.createElement('span');
     delSpan.className = 'chat-delete';
     delSpan.innerHTML = '\u00d7';
-    delSpan.onclick = function(e) { e.stopPropagation(); deleteChat(item.id); };
+    // 删除不可逆，点 × 先弹全局确认层（showConfirm 在 project.js），确认才真删
+    delSpan.onclick = function(e) {
+      e.stopPropagation();
+      showConfirm('删除对话', '确定删除「' + (item.title || '新对话') + '」？删除后不可恢复。',
+        function () { deleteChat(item.id); });
+    };
     div.innerHTML = '';
     div.appendChild(titleSpan);
     div.appendChild(delSpan);

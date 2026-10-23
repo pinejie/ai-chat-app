@@ -8,7 +8,7 @@
 <meta name="theme-color" content="#0a0a0f">
 <title>ZD Code</title>
 <!-- 移动端独立样式（§3.1 D1）；设计令牌取值沿用 PC，保证「同一个工具」的识别（§6） -->
-<link rel="stylesheet" href="style.css?v=1792643367">
+<link rel="stylesheet" href="style.css?v=1792736080">
 <!-- 第三方库不复制，引用 /static 下的本地打包件（§3.1 缓解措施） -->
 <link rel="stylesheet" href="/static/highlight-theme-dark.css" id="hljsTheme">
 </head>
@@ -43,6 +43,18 @@
     <div class="rename-row">
       <button id="btnRenameCancel" class="link-btn" type="button">取消</button>
       <button id="btnRenameSave" class="btn-primary" type="button">保存</button>
+    </div>
+  </div>
+</div>
+
+<!-- 删除确认弹层：抽屉会话行内 ✕ 按钮触发（mobile.js bindDelete），复用改名弹层样式 -->
+<div id="delOverlay" class="rename-overlay hidden">
+  <div class="rename-card">
+    <div class="rename-title">删除对话</div>
+    <div id="delText" class="del-text">删除后不可恢复。</div>
+    <div class="rename-row">
+      <button id="btnDelCancel" class="link-btn" type="button">取消</button>
+      <button id="btnDelConfirm" class="btn-danger" type="button">删除</button>
     </div>
   </div>
 </div>
@@ -186,9 +198,9 @@
 <script src="/static/js/marked.min.js"></script>
 <script src="/static/js/highlight.min.js"></script>
 <script src="/static/js/purify.min.js"></script>
-<script src="js/ui.js?v=1792643367"></script>
+<script src="js/ui.js?v=1792734655"></script>
 <!-- 协议层：鉴权探测、会话、WebSocket 收发、消息渲染、文档只读浏览 -->
-<script src="js/mobile.js?v=1792644086"></script>
+<script src="js/mobile.js?v=1792736675"></script>
 
 </body>
 </html>

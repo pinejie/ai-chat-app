@@ -6,7 +6,7 @@
   --border:#1e1e2e;--border2:#2a2a3e;
   --text:#e0e0e0;--text2:#aaa;--text3:#888;--text4:#666;--text5:#555;
   --link:#60a5fa;--accent:#2563eb;--accent2:#3b82f6;--accent3:#1e40af;
-  --danger:#dc2626;--danger2:#ef4444;--warn:#f59e0b;--success:#22c55e;
+  --danger:#dc2626;--danger2:#ef4444;--danger3:#b91c1c;--warn:#f59e0b;--success:#22c55e;
   --code-bg:#111118;
   --radius:12px;--radius-sm:8px;
   --shadow-sm:0 1px 2px rgba(0,0,0,.35);
@@ -22,7 +22,7 @@
   --border:#d4d4d4;--border2:#c0c0c0;
   --text:#1a1a1a;--text2:#555;--text3:#666;--text4:#888;--text5:#999;
   --link:#2563eb;--accent:#2563eb;--accent2:#3b82f6;--accent3:#1e40af;
-  --danger:#dc2626;--danger2:#ef4444;--warn:#d97706;--success:#16a34a;
+  --danger:#dc2626;--danger2:#ef4444;--danger3:#b91c1c;--warn:#d97706;--success:#16a34a;
   --code-bg:#f0f0f0;
   --shadow-sm:0 1px 2px rgba(15,23,42,.06);
   --shadow-md:0 6px 20px -8px rgba(15,23,42,.18);
@@ -35,7 +35,7 @@
   --border:#d4c8b0;--border2:#c4b8a0;
   --text:#3d3224;--text2:#6b5d4a;--text3:#8a7a66;--text4:#a0906e;--text5:#b5a580;
   --link:#b45309;--accent:#b45309;--accent2:#d97706;--accent3:#92400e;
-  --danger:#c2410c;--danger2:#ea580c;--warn:#ca8a04;--success:#65a30d;
+  --danger:#c2410c;--danger2:#ea580c;--danger3:#9a3412;--warn:#ca8a04;--success:#65a30d;
   --code-bg:#ede5d8;
   --shadow-sm:0 1px 2px rgba(92,64,20,.08);
   --shadow-md:0 6px 20px -8px rgba(92,64,20,.22);
@@ -352,9 +352,10 @@ body{height:100vh;display:flex;background:var(--bg);color:var(--text);font-famil
 .proj-btn.danger:hover{background:var(--danger);color:#fff}
 
 /* 确认弹窗 */
-.modal-message{padding:0 20px 16px;color:var(--text2);font-size:13px;line-height:1.5}
+/* box 已有 22px 内衬，这里不再横向缩进，否则消息比标题/按钮窄一截 */
+.modal-message{padding:0;color:var(--text2);font-size:13px;line-height:1.5}
 .confirm-btn.danger{background:var(--danger);color:#fff}
-.confirm-btn.danger:hover{background:#b91c1c}
+.confirm-btn.danger:hover{background:var(--danger3)}
 
 /* 登录框 */
 .login-box{width:340px;padding:28px 26px 22px}
@@ -389,3 +390,8 @@ body{height:100vh;display:flex;background:var(--bg);color:var(--text);font-famil
 .ws-mgr-form{display:flex;flex-direction:column;gap:8px}
 .ws-mgr-default{font-size:12px;color:var(--text2);display:flex;align-items:center;gap:6px}
 .ws-mgr-error{min-height:16px;font-size:12px;color:var(--danger2)}
+
+/* ---- 无障碍：动效敏感的用户直接显隐，不做弹出/滑动 ---- */
+@media (prefers-reduced-motion:reduce){
+  *,*::before,*::after{animation-duration:.001ms!important;animation-iteration-count:1!important;transition-duration:.001ms!important}
+}
