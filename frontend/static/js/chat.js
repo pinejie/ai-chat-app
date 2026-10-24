@@ -209,6 +209,7 @@ async function loadChatList() {
 }
 
 function renderChatList(list) {
+  dragAbort();                                      // 列表重建先中止在途拖拽，防 pointerup 落空导致状态悬挂
   const el = document.getElementById('chatList');
   el.innerHTML = '';
   for (const item of list) {
@@ -217,23 +218,149 @@ function renderChatList(list) {
     const titleSpan = document.createElement('span');
     titleSpan.className = 'chat-title';
     titleSpan.textContent = item.title || '新对话';
-    titleSpan.ondblclick = function(e) { e.stopPropagation(); enableRename(this, item.id); };
+    titleSpan.ondblclick = function(e) { e.stopPropagation(); if (dragSuppressClick()) return; enableRename(this, item.id); };
     const delSpan = document.createElement('span');
     delSpan.className = 'chat-delete';
     delSpan.innerHTML = '\u00d7';
     // 删除不可逆，点 × 先弹全局确认层（showConfirm 在 project.js），确认才真删
     delSpan.onclick = function(e) {
       e.stopPropagation();
+      if (dragSuppressClick()) return;
       showConfirm('删除对话', '确定删除「' + (item.title || '新对话') + '」？删除后不可恢复。',
         function () { deleteChat(item.id); });
     };
     div.innerHTML = '';
+    div.dataset.sid = item.id;                     // 拖拽排序的数据锚点
     div.appendChild(titleSpan);
     div.appendChild(delSpan);
     div.title = item.workspace_path || '默认目录';   // 悬停可见每条对话的目录
-    div.onclick = () => switchChat(item.id);
+    div.onclick = () => { if (!dragSuppressClick()) switchChat(item.id); };
+    attachDragSort(div);
     el.appendChild(div);
   }
+}
+
+/* --- 手动排序（整行拖拽，纯 Pointer Events 不引库）---
+   按下竖移不足 5px 完全不进入拖拽（点击打开/双击改名/× 删除零影响）；
+   超阈值拖起：本行跟手，from..to 之间兄弟行让位，松手提交 reorder 后以服务端为准。
+   与移动端 mobile.js 把手拖拽互为镜像，改动必须两端同步：
+   - move/up 绑 window，capture 拖起后才设——按下即 capture 会把 click 重定向到整行，× 删除、双击改名全被吞；
+   - 列表重建（loadChatList）先中止在途拖拽；
+   - 目标位计入滚动偏移 + 边缘自动滚动；兄弟行仅在目标槽位变化时重排。 */
+const DRAG_THRESHOLD_PX = 5, DRAG_EDGE_PX = 28, DRAG_SCROLL_PX = 6;
+let dragCtx = null;
+let dragSuppressUntil = 0;
+function dragSuppressClick() { return Date.now() < dragSuppressUntil; }
+
+function dragScrollParent(node) {
+  let p = node ? node.parentElement : null;
+  while (p) {
+    if (/(auto|scroll)/.test(getComputedStyle(p).overflowY) && p.scrollHeight > p.clientHeight) return p;
+    p = p.parentElement;
+  }
+  return null;
+}
+function dragAbort() {
+  if (!dragCtx) return;
+  const d = dragCtx; dragCtx = null;
+  if (d.raf) cancelAnimationFrame(d.raf);
+  window.removeEventListener('pointermove', pcMove);
+  window.removeEventListener('pointerup', pcUp);
+  window.removeEventListener('pointercancel', pcUp);
+}
+function dragUpdate(clientY) {
+  const d = dragCtx; if (!d) return;
+  const shift = d.scroller ? d.scroller.scrollTop - d.startScroll : 0;
+  const eff = clientY - d.startY + shift;           // 滚动补偿入 transform，行始终跟手
+  d.row.style.transform = 'translateY(' + eff + 'px)';
+  const maxIdx = d.rows.length - 1;
+  d.toIdx = Math.max(0, Math.min(maxIdx, d.fromIdx + Math.round(eff / (d.step || 1))));
+  if (d.toIdx === d.appliedTo) return;
+  d.appliedTo = d.toIdx;
+  d.rows.forEach(function (r, i) {
+    if (r === d.row) return;
+    let t = 0;
+    if (d.toIdx > d.fromIdx && i > d.fromIdx && i <= d.toIdx) t = -d.step;
+    else if (d.toIdx < d.fromIdx && i >= d.toIdx && i < d.fromIdx) t = d.step;
+    r.style.transform = t ? 'translateY(' + t + 'px)' : '';
+  });
+}
+function dragAutoScroll(e) {
+  const d = dragCtx; if (!d || !d.scroller) return;
+  const rect = d.scroller.getBoundingClientRect();
+  let dir = 0;
+  if (e.clientY < rect.top + DRAG_EDGE_PX) dir = -1;
+  else if (e.clientY > rect.bottom - DRAG_EDGE_PX) dir = 1;
+  else if (e.clientX < rect.left || e.clientX > rect.right) dir = 0;
+  if (dir === 0) { if (d.raf) { cancelAnimationFrame(d.raf); d.raf = null; } return; }
+  if (d.raf) return;
+  d.lastY = e.clientY;
+  const tick = function () {
+    if (!dragCtx || !dragCtx.raf) return;
+    dragCtx.scroller.scrollTop += dir * DRAG_SCROLL_PX;
+    dragUpdate(dragCtx.lastY);
+    dragCtx.raf = requestAnimationFrame(tick);
+  };
+  d.raf = requestAnimationFrame(tick);
+}
+function pcMove(e) {
+  const d = dragCtx; if (!d || e.pointerId !== d.pointerId) return;
+  if (!d.dragging) {
+    if (Math.abs(e.clientY - d.startY) < DRAG_THRESHOLD_PX) return;
+    d.dragging = true;
+    d.row.classList.add('dragging');
+    try { d.row.setPointerCapture(d.pointerId); } catch (err) {}   // 确认是拖拽才 capture，纯点击不设
+  }
+  d.lastY = e.clientY;
+  dragUpdate(e.clientY);
+  dragAutoScroll(e);
+}
+function pcUp(e) {
+  const d = dragCtx; if (!d || (e && e.pointerId !== d.pointerId)) return;
+  window.removeEventListener('pointermove', pcMove);
+  window.removeEventListener('pointerup', pcUp);
+  window.removeEventListener('pointercancel', pcUp);
+  if (d.raf) cancelAnimationFrame(d.raf);
+  dragCtx = null;
+  if (!d.dragging) return;                          // 没超阈值：一次普通点击，交给原 onclick
+  dragSuppressUntil = Date.now() + 350;             // 拖尾 click 不是用户意图，压掉
+  d.row.classList.remove('dragging');
+  d.rows.forEach(function (r) { r.style.transform = ''; });
+  if (d.toIdx !== d.fromIdx) commitOrder(d);
+}
+
+function attachDragSort(div) {
+  div.addEventListener('pointerdown', function (e) {
+    if (e.button !== 0 || dragCtx) return;
+    if (e.target.closest('.chat-delete')) return;   // × 上的按下交给删除流程，不进拖拽
+    if (e.target.tagName === 'INPUT') return;       // 改名输入编辑中，不抢文本选择
+    const box = document.getElementById('chatList');
+    const rows = Array.prototype.slice.call(box.children);
+    const fromIdx = rows.indexOf(div);
+    if (fromIdx < 0) return;
+    dragCtx = { row: div, rows: rows, fromIdx: fromIdx, toIdx: fromIdx, appliedTo: fromIdx,
+                startY: e.clientY, lastY: e.clientY, pointerId: e.pointerId, dragging: false, raf: null,
+                scroller: dragScrollParent(box), startScroll: 0,
+                step: rows.length > 1 ? rows[1].offsetTop - rows[0].offsetTop : 0 };
+    dragCtx.startScroll = dragCtx.scroller ? dragCtx.scroller.scrollTop : 0;
+    window.addEventListener('pointermove', pcMove);
+    window.addEventListener('pointerup', pcUp);
+    window.addEventListener('pointercancel', pcUp);
+  });
+}
+
+async function commitOrder(d) {
+  const ids = d.rows.map(function (r) { return r.dataset.sid; });
+  const moved = ids.splice(d.fromIdx, 1)[0];
+  ids.splice(d.toIdx, 0, moved);
+  try {
+    const res = await fetch(API + '/api/sessions/reorder', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ids: ids }),
+    });
+    if (!res.ok) { const j = await res.json().catch(function () { return {}; }); throw new Error(j.detail || res.status); }
+  } catch (e) { addSystemMsg('排序失败：' + e.message); }
+  await loadChatList();                             // 成功同步、失败借重拉回滚视觉
 }
 
 async function deleteChat(sessionId) {

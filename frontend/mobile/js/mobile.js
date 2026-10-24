@@ -159,19 +159,8 @@
     }
   }
 
-  function dayLabel(ts) {
-    if (!ts) return '更早';
-    const d = new Date(ts * 1000), now = new Date();
-    const same = function (a, b) {
-      return a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth() && a.getDate() === b.getDate();
-    };
-    if (same(d, now)) return '今天';
-    const y = new Date(now.getTime() - 86400000);
-    if (same(d, y)) return '昨天';
-    return (d.getMonth() + 1) + '月' + d.getDate() + '日';
-  }
-
   function renderSessionList(list) {
+    dragAbort();                                   // 列表重建先中止在途拖拽，防 pointerup 落空导致状态悬挂
     const box = el.mSessionList;
     box.innerHTML = '';
     if (!list.length) {
@@ -181,16 +170,9 @@
       box.appendChild(d);
       return;
     }
-    let lastGroup = '';
+    // 手动排序形态：按服务端 sort_order 平铺渲染。日期分组与手动排序互斥
+    // （同一天的对话被拖散后分组反而误导），随拖拽排序上线一并撤除。
     for (const item of list) {
-      const g = dayLabel(item.created);   // 索引里没有 updated_at；按创建时间与列表排序语义一致（updated_at 恒 undefined，分组全落「更早」的老 bug 一并修掉）
-      if (g !== lastGroup) {
-        lastGroup = g;
-        const h = document.createElement('div');
-        h.className = 'session-date';
-        h.textContent = g;
-        box.appendChild(h);
-      }
       box.appendChild(sessionRow(item));
     }
   }
@@ -198,6 +180,15 @@
   function sessionRow(item) {
     const row = document.createElement('div');
     row.className = 'session-item' + (item.id === sid ? ' active' : '');
+    row.dataset.sid = item.id;                     // 拖拽排序的数据锚点
+    const grip = document.createElement('button');
+    grip.className = 'session-grip';
+    grip.type = 'button';
+    grip.setAttribute('aria-label', '按住拖动「' + (item.title || '新对话') + '」排序');
+    grip.textContent = '≡';
+    grip.addEventListener('click', function (e) { e.stopPropagation(); });  // 点把手不该打开会话
+    bindGripDrag(grip, row);
+    row.appendChild(grip);
     const t = document.createElement('span');
     t.className = 'session-item-title';
     t.textContent = item.title || '新对话';
@@ -224,6 +215,120 @@
     row.appendChild(del);
     row.addEventListener('click', function () { openSession(item.id); });
     return row;
+  }
+
+  /* --- 手动排序（行首"≡"把手拖拽，纯 Pointer Events 不引库）---
+     触屏行本身要担"点按打开"、列表要担"竖滑滚动"，整行可拖会吃掉滚动，
+     所以把拖拽限定在独立把手上（CSS touch-action:none 只加把手）。
+     把手按下即进拖（命中区独立，不需要 PC 那套 5px 阈值）。
+     与 PC chat.js 的同款实现互为镜像，改动必须两端同步：
+     - move/up 绑在 window 上，pointer capture 只是增强，内核不支持也不丢事件；
+     - 列表任何重建（流式 result 触发 loadSessions 等）先中止在途拖拽，防状态悬挂；
+     - 目标位换算计入滚动偏移，拖近容器上下沿自动滚动，长列表拖得到底；
+     - 兄弟行只在 toIdx 真正变化时重排，不逐事件全量重写。 */
+  const DRAG_EDGE_PX = 28, DRAG_SCROLL_PX = 6;
+  let mDrag = null;
+  function dragScrollParent(node) {
+    let p = node ? node.parentElement : null;
+    while (p) {
+      if (/(auto|scroll)/.test(getComputedStyle(p).overflowY) && p.scrollHeight > p.clientHeight) return p;
+      p = p.parentElement;
+    }
+    return null;
+  }
+  function dragAbort() {          // 列表重建时的中止：只清状态，视觉由重建本身负责
+    if (!mDrag) return;
+    const d = mDrag; mDrag = null;
+    if (d.raf) cancelAnimationFrame(d.raf);
+    window.removeEventListener('pointermove', onMove);
+    window.removeEventListener('pointerup', onEnd);
+    window.removeEventListener('pointercancel', onEnd);
+  }
+  function dragUpdate(clientY) {
+    const d = mDrag; if (!d) return;
+    const shift = d.scroller ? d.scroller.scrollTop - d.startScroll : 0;
+    const eff = clientY - d.startY + shift;          // transform 计入滚动补偿，行才始终跟手
+    d.row.style.transform = 'translateY(' + eff + 'px)';
+    const maxIdx = d.rows.length - 1;
+    d.toIdx = Math.max(0, Math.min(maxIdx, d.fromIdx + Math.round(eff / (d.step || 1))));
+    if (d.toIdx === d.appliedTo) return;
+    d.appliedTo = d.toIdx;
+    d.rows.forEach(function (r, i) {
+      if (r === d.row) return;
+      let t = 0;
+      if (d.toIdx > d.fromIdx && i > d.fromIdx && i <= d.toIdx) t = -d.step;
+      else if (d.toIdx < d.fromIdx && i >= d.toIdx && i < d.fromIdx) t = d.step;
+      r.style.transform = t ? 'translateY(' + t + 'px)' : '';
+    });
+  }
+  function dragAutoScroll(e) {
+    const d = mDrag; if (!d || !d.scroller) return;
+    const rect = d.scroller.getBoundingClientRect();
+    let dir = 0;
+    if (e.clientY < rect.top + DRAG_EDGE_PX) dir = -1;
+    else if (e.clientY > rect.bottom - DRAG_EDGE_PX) dir = 1;
+    else if (e.clientX < rect.left || e.clientX > rect.right) dir = 0;
+    if (dir === 0) { if (d.raf) { cancelAnimationFrame(d.raf); d.raf = null; } return; }
+    if (d.raf) return;                               // 已在滚就交给 tick
+    d.lastY = e.clientY;
+    const tick = function () {
+      if (!mDrag || !mDrag.raf) return;
+      mDrag.scroller.scrollTop += dir * DRAG_SCROLL_PX;
+      dragUpdate(mDrag.lastY);
+      mDrag.raf = requestAnimationFrame(tick);
+    };
+    d.raf = requestAnimationFrame(tick);
+  }
+  function onMove(e) {
+    const d = mDrag; if (!d || e.pointerId !== d.pointerId) return;
+    d.lastY = e.clientY;
+    dragUpdate(e.clientY);
+    dragAutoScroll(e);
+  }
+  function onEnd(e) {
+    const d = mDrag; if (!d || (e && e.pointerId !== d.pointerId)) return;
+    window.removeEventListener('pointermove', onMove);
+    window.removeEventListener('pointerup', onEnd);
+    window.removeEventListener('pointercancel', onEnd);
+    if (d.raf) cancelAnimationFrame(d.raf);
+    mDrag = null;
+    d.row.classList.remove('dragging');
+    d.rows.forEach(function (r) { r.style.transform = ''; });
+    if (d.toIdx !== d.fromIdx) commitOrder(d);
+  }
+  function bindGripDrag(grip, row) {
+    grip.addEventListener('pointerdown', function (e) {
+      if (mDrag || (e.button !== undefined && e.button > 0)) return;
+      const rows = Array.prototype.slice.call(el.mSessionList.children);
+      const fromIdx = rows.indexOf(row);
+      if (fromIdx < 0) return;
+      e.preventDefault();                            // 压掉长按选字/系统呼出
+      const scroller = dragScrollParent(el.mSessionList);
+      mDrag = { row: row, rows: rows, fromIdx: fromIdx, toIdx: fromIdx, appliedTo: fromIdx,
+                startY: e.clientY, lastY: e.clientY, pointerId: e.pointerId, raf: null,
+                scroller: scroller, startScroll: scroller ? scroller.scrollTop : 0,
+                step: rows.length > 1 ? rows[1].offsetTop - rows[0].offsetTop : 0 };
+      try { grip.setPointerCapture(e.pointerId); } catch (err) {}   // 仅增强，事件不靠它
+      row.classList.add('dragging');
+      window.addEventListener('pointermove', onMove);
+      window.addEventListener('pointerup', onEnd);
+      window.addEventListener('pointercancel', onEnd);
+    });
+  }
+
+  async function commitOrder(d) {
+    const ids = d.rows.map(function (r) { return r.dataset.sid; });
+    const moved = ids.splice(d.fromIdx, 1)[0];
+    ids.splice(d.toIdx, 0, moved);
+    try {
+      // 不用 postJSON：api() 层把后端的 detail 吞成 "HTTP 400"，这里要给用户能懂的话
+      const res = await fetch(API + '/api/sessions/reorder', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ids: ids }),
+      });
+      if (!res.ok) { const j = await res.json().catch(function () { return {}; }); throw new Error(j.detail || res.status); }
+    } catch (e) { MUI.toast('排序失败：' + e.message, true); }
+    await loadSessions();                            // 服务端顺序为准（失败时也借它回滚）
   }
 
   /* ---------------- 重命名 ----------------

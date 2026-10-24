@@ -331,12 +331,46 @@ async def fork_session(session_id: str, body: dict = Body(default=None)):
     return {**new_sess, "forked": True}
 
 
+def _ordered_index() -> list[dict]:
+    """列表顺序的单一排序键：sort_order 升序。
+    首次（或有旧条目缺字段）按「created 降序 + 文件序」补号迁移——迁移结果与升级前
+    的屏幕顺序完全一致，用户无感。之后顺序只由 reorder 决定。"""
+    index = SessionStore.load_index()
+    if any("sort_order" not in e for e in index):
+        ordered = sorted(index, key=lambda e: e.get("created", 0), reverse=True)
+        for rank, entry in enumerate(ordered):
+            entry["sort_order"] = rank
+        SessionStore.save_index(ordered)
+        index = ordered
+    return sorted(index, key=lambda e: e["sort_order"])
+
+
 @app.get("/api/sessions")
 def list_sessions():
-    # 顺序稳定契约：只按 created 降序（新的在前），创建后永不挪位；
-    # 查看/切换/重连不再写索引（touch 只刷内存 TTL 时间）。同秒新建按稳定排序
-    # 保留文件序，而文件里新条目恒插在最前，所以同秒也是新在前。
-    return sorted(SessionStore.load_index(), key=lambda e: e.get("created", 0), reverse=True)
+    # 顺序契约：sort_order 升序；查看/切换/重连/发消息都不改顺序，只有 reorder 会。
+    return _ordered_index()
+
+
+@app.post("/api/sessions/reorder")
+async def reorder_sessions(body: dict = Body(...)):
+    """PC 拖拽排序提交：ids 为期望顺序的全量会话 id。
+    与现有集合不一致直接拒绝——宁可让前端重拉列表，也不让陈旧页面的拖拽
+    悄悄把新建/删除的对话挤掉（整表重编号，漏一个就丢一个）。"""
+    ids = body.get("ids")
+    if not isinstance(ids, list) or not all(isinstance(i, str) for i in ids):
+        raise HTTPException(400, "ids 必须是会话 id 数组")
+    if len(ids) != len(set(ids)):
+        raise HTTPException(400, "ids 含重复项")
+    ordered = _ordered_index()
+    current = {e["id"] for e in ordered}
+    if set(ids) != current:
+        raise HTTPException(400, "会话列表已变化，请刷新后重试")
+    by_id = {e["id"]: e for e in ordered}
+    reordered = [by_id[i] for i in ids]
+    for rank, entry in enumerate(reordered):
+        entry["sort_order"] = rank
+    SessionStore.save_index(reordered)
+    return {"ok": True, "count": len(reordered)}
 
 
 @app.get("/api/sessions/{session_id}/history")

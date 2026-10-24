@@ -224,7 +224,14 @@ hr{border:none;border-top:1px solid var(--border);margin:12px 0}
   border:none;background:transparent;color:var(--text5);font-size:15px;cursor:pointer;
   border-radius:var(--radius-sm);font-family:inherit;margin-right:-8px}
 .session-del:active{background:var(--bg4);color:var(--danger)}
-.session-date{font-size:10.5px;color:var(--text5);font-family:var(--font-mono);padding:8px 12px 4px}
+/* 行首拖拽把手：44px 命中区同改名钮；touch-action 只在此禁用——
+   行与列表的滚动、点按打开都不受拖拽功能牵连 */
+.session-grip{flex:none;width:44px;height:44px;margin-left:-8px;display:inline-flex;align-items:center;justify-content:center;
+  border:none;background:transparent;color:var(--text5);font-size:16px;cursor:grab;font-family:inherit;
+  border-radius:var(--radius-sm);touch-action:none}
+.session-grip:active{background:var(--bg4);color:var(--text)}
+/* 拖拽中的行：浮起跟手；行需有定位基准 z-index 才生效 */
+.session-item.dragging{position:relative;z-index:5;background:var(--bg3);box-shadow:var(--shadow-md);opacity:.95}
 
 .docs-pane{padding:4px 0 8px}
 .docs-path{font-size:11px;color:var(--text5);font-family:var(--font-mono);padding:0 2px 6px}

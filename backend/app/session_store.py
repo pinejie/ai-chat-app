@@ -50,6 +50,11 @@ class SessionStore:
             "title": title,
             "created": int(time.time()),
             "last_active": int(time.time()),
+            # 列表排序键（升序展示）。新对话取现有最小值-1 恒插最顶；
+            # 未迁移条目缺该字段时 min 空集回 0，首个对话得 0，语义一致。
+            "sort_order": min(
+                (e["sort_order"] for e in index if "sort_order" in e), default=1
+            ) - 1,
         }
         # workspace_path 是创建时的快照：之后注册表改名/改路径都不影响本对话
         if workspace_id:

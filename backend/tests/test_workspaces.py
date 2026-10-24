@@ -154,18 +154,41 @@ class WorkspaceTests(unittest.TestCase):
         self.assertTrue(f2["forked"])
         self.assertNotEqual(f2["session_id"], s["session_id"])
 
-    # ---- 列表排序（顺序稳定契约：只认 created，查看/重连不跳位） ----
+    # ---- 列表排序（单一排序键 sort_order；查看/重连不跳位，只有 reorder 会变） ----
 
-    def test_sessions_list_sorted_by_created_regardless_of_file_order(self):
+    def test_sessions_list_migrates_to_sort_order_without_changing_view(self):
+        # 存量数据缺 sort_order：首次读取按 created 降序补号，屏幕顺序与旧契约一致
         a = self.client.post("/api/sessions", json={}).json()["session_id"]
         b = self.client.post("/api/sessions", json={}).json()["session_id"]
         c = self.client.post("/api/sessions", json={}).json()["session_id"]
         by_id = {e["id"]: e for e in SessionStore.load_index()}
         for sid, ts in ((a, 100), (b, 300), (c, 200)):
+            by_id[sid].pop("sort_order", None)
             by_id[sid]["created"] = ts
-        SessionStore.save_index([by_id[a], by_id[b], by_id[c]])  # 故意按 created 乱序落盘
+        SessionStore.save_index([by_id[a], by_id[b], by_id[c]])  # 无排序键 + 乱序落盘
         ids = [e["id"] for e in self.client.get("/api/sessions").json()]
-        self.assertEqual(ids[:3], [b, c, a])                     # 读出仍恒为 created 降序
+        self.assertEqual(ids[:3], [b, c, a])                     # 迁移即 created 降序
+        idx = SessionStore.load_index()
+        self.assertTrue(all("sort_order" in e for e in idx))     # 迁移已落盘
+        SessionStore.save_index(list(reversed(idx)))             # 文件序颠倒、sort_order 未动
+        self.assertEqual([e["id"] for e in self.client.get("/api/sessions").json()], ids)
+
+    def test_reorder_persists_and_validates(self):
+        for _ in range(3):
+            self.client.post("/api/sessions", json={})
+        ids = [e["id"] for e in self.client.get("/api/sessions").json()]
+        rev = list(reversed(ids))
+        r = self.client.post("/api/sessions/reorder", json={"ids": rev})
+        self.assertEqual(r.status_code, 200, r.text)
+        self.assertEqual([e["id"] for e in self.client.get("/api/sessions").json()], rev)
+        # 新建仍恒插最顶（add_to_index 取 min-1，与 created 解耦）
+        d = self.client.post("/api/sessions", json={}).json()["session_id"]
+        self.assertEqual(self.client.get("/api/sessions").json()[0]["id"], d)
+        # 陈旧集合（少一个）与重复 ids 都拒绝，防覆盖并行变更
+        self.assertEqual(self.client.post("/api/sessions/reorder", json={"ids": ids}).status_code, 400)
+        self.assertEqual(self.client.post("/api/sessions/reorder",
+                                          json={"ids": rev + [rev[0]]}).status_code, 400)
+        self.assertEqual(self.client.post("/api/sessions/reorder", json={"ids": "x"}).status_code, 400)
 
     def test_touch_does_not_reorder_index(self):
         a = self.client.post("/api/sessions", json={}).json()["session_id"]
