@@ -3,7 +3,7 @@
 // Switching = show/hide. No save/restore needed.
 
 const SESSION_HTML = `
-  <div class="header"><span>ZD Code</span></div>
+  <div class="header"><span class="header-title">ZD Code</span></div>
   <div class="messages"><div class="messages-inner"></div></div>
   <div class="trace-panel" style="display:none">
     <div class="trace-header" onclick="toggleTracePanel()">
@@ -208,6 +208,18 @@ async function loadChatList() {
   return list;
 }
 
+/* 顶栏标题：有对话显示会话标题（超长由 CSS 省略，悬停 title 看全称），
+   无对话回退品牌字"ZD Code"。改名/自动改标题/删除都汇到 renderChatList 刷新。 */
+function renderHeaderTitle() {
+  if (!currentCtx) return;
+  const h = currentCtx.container.querySelector('.header-title');
+  if (!h) return;
+  const s = chatListCache.filter(function (c) { return c.id === currentSessionId; })[0];
+  const title = currentSessionId ? ((s && s.title) || '新对话') : 'ZD Code';
+  h.textContent = title;
+  h.title = title;
+}
+
 function renderChatList(list) {
   dragAbort();                                      // 列表重建先中止在途拖拽，防 pointerup 落空导致状态悬挂
   const el = document.getElementById('chatList');
@@ -238,6 +250,7 @@ function renderChatList(list) {
     attachDragSort(div);
     el.appendChild(div);
   }
+  renderHeaderTitle();
 }
 
 /* --- 手动排序（整行拖拽，纯 Pointer Events 不引库）---
@@ -423,6 +436,7 @@ async function switchChat(sessionId) {
 
   // Save current globals + switch container
   switchCtx(sessionId);
+  renderHeaderTitle();   // 切换即刷新顶栏（此路径不经过 renderChatList）
 
   // Update sidebar
   document.getElementById('sessionId').textContent = sessionId.slice(0, 8) + '...';
