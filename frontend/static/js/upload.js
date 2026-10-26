@@ -80,7 +80,8 @@ async function uploadFiles(files) {
 async function sendMessage() {
   if (isGenerating) { notifyBlockedSend(); return; }
   if (!currentCtx) return;
-  const input = currentCtx.inputEl;
+  const sendCtx = currentCtx;   // 上传 await 后 currentCtx 可能已切会话，高度等状态按发送时的会话读
+  const input = sendCtx.inputEl;
   const text = input.value.trim();
   const _conn = sessionConnected.get(currentSessionId);
   if (!text || !_conn) return;
@@ -102,7 +103,8 @@ async function sendMessage() {
 
   messageHistory.push(text); historyIndex = -1; tempInput = '';
   input.value = '';
-  input.style.height = 'auto';
+  // 手动拖拽模式下发送后保持原高度，自动模式才收回
+  input.style.height = sendCtx.inputManualH != null ? sendCtx.inputManualH + 'px' : 'auto';
   resetTrace();
   addUserMsg(text);
 

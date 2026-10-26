@@ -12,7 +12,7 @@
     light: '/static/highlight-theme-light.css',
     warm: '/static/highlight-theme-light.css',
   };
-  const MAX_INPUT_H = 132;                 // 与 style.css 的 .input max-height 保持一致
+  const MAX_INPUT_H = 200;                 // 与 style.css 的 .input max-height 保持一致
 
   const $ = (id) => document.getElementById(id);
   const el = {

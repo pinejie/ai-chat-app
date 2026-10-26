@@ -211,10 +211,17 @@ body{height:100vh;display:flex;background:var(--bg);color:var(--text);font-famil
 .msg-system{text-align:center;font-size:12px;color:var(--danger2);padding:6px;margin:6px 0}
 .msg-stopped{text-align:center;font-size:12px;color:var(--warn);padding:6px;margin:6px 0}
 
-.input-area{border-top:1px solid var(--border);background:var(--bg2);padding:14px 20px 18px}
+.input-area{position:relative;border-top:1px solid var(--border);background:var(--bg2);padding:14px 20px 18px}
+/* 输入区顶部拖拽热区（VSCode 式分割线）：hover 出现指示条，按住可拖动；双击恢复自动增高。逻辑在 chat.js _bindInputResizeHandle */
+.input-resize-handle{position:absolute;top:-4px;left:0;right:0;height:8px;cursor:row-resize;z-index:6;touch-action:none}
+.input-resize-handle::after{content:'';position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);width:44px;height:4px;border-radius:2px;background:var(--border2);opacity:0;transition:opacity .15s,background .15s;pointer-events:none}
+.input-resize-handle:hover::after,.input-resize-handle.dragging::after{opacity:1;background:var(--accent)}
+body.input-resizing{cursor:row-resize;user-select:none}
 .input-inner{max-width:820px;margin:0 auto}
 .input-box{display:flex;flex-direction:column;border-radius:16px;background:var(--bg2);border:1px solid var(--border2);box-shadow:var(--shadow-md);overflow:hidden;transition:border-color .15s,box-shadow .15s}
-.input-box textarea{flex:1;resize:none;min-height:52px;max-height:200px;border:none;background:transparent;padding:14px 16px 6px;color:var(--text);font-size:14px;line-height:1.55;outline:none;font-family:inherit;width:100%;box-sizing:border-box}
+/* flex:none 而非 flex:1 —— 列容器里 flex-basis 优先于 height，
+   用 flex:1 会让 JS 设置的 height（自动增高/拖拽）全部失效，浏览器实测踩过 */
+.input-box textarea{flex:none;resize:none;min-height:52px;max-height:280px; /* 与 chat.js INPUT_MAX_H 保持一致 */border:none;background:transparent;padding:14px 16px 6px;color:var(--text);font-size:14px;line-height:1.55;outline:none;font-family:inherit;width:100%;box-sizing:border-box}
 .input-box:focus-within{border-color:var(--accent);box-shadow:var(--shadow-md),var(--ring)}
 .input-box textarea::placeholder{color:var(--text5)}
 .input-box textarea:disabled{opacity:0.5;cursor:not-allowed}

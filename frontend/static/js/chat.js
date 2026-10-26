@@ -2,6 +2,11 @@
 // Messages + Trace + Input area + Buttons — all per-session.
 // Switching = show/hide. No save/restore needed.
 
+// 输入框高度：自动模式上限 + 手动拖拽模式（全局共享，存 localStorage）
+const INPUT_MAX_H = 280;                      // 与 style.css .input-box textarea 的 max-height 保持一致
+const INPUT_MANUAL_MIN_H = 80;                // 手动拖拽的下限（一行 + 工具栏）
+const INPUT_MANUAL_KEY = 'zd_input_manual_h'; // 拖拽结果（px）；无该键 = 自动增高模式
+
 const SESSION_HTML = `
   <div class="header"><span class="header-title">ZD Code</span></div>
   <div class="messages"><div class="messages-inner"></div></div>
@@ -21,6 +26,7 @@ const SESSION_HTML = `
     <span class="trace-bar-toggle">▲</span>
   </div>
   <div class="input-area">
+    <div class="input-resize-handle" title="拖动调整输入区高度，双击恢复自动增高"></div>
     <div class="input-inner">
       <div class="send-hint"></div>
       <div class="input-box">
@@ -79,6 +85,7 @@ function newSessionCtx(sid) {
     finalAssistantHtml: '',
     // Input state
     inputState: { history: [], index: -1, tempInput: '' },
+    inputManualH: null,   // 非 null = 手动拖拽高度（px），自动增高暂停
     // Trace state
     traceEvents: [],
     tracePanelOpen: false,
@@ -92,6 +99,95 @@ function newSessionCtx(sid) {
   _attachSessionListeners(ctx);
   populateSettingSelects(ctx);
   return ctx;
+}
+
+// --- 输入区拖动调整高度（VSCode 式分割线） ---
+// 按住输入区顶部的热区上下拖动手动固定高度；双击恢复自动增高。
+// 高度经 localStorage 全局记忆；手动模式下上方 input 监听跳过自增高。
+function _bindInputResizeHandle(ctx) {
+  const handle = ctx.container.querySelector('.input-resize-handle');
+  if (!handle) return;
+
+  // 用兼容鼠标事件（mousedown 系）而非 pointer 事件驱动拖拽：
+  // pointer 链路可能被门户注入/扩展整体吞掉（症状：hover 正常但拖不动且无任何报错），
+  // mousedown/mousemove/mouseup 是桌面浏览器最不可能缺席的一条路。move/up 挂 window 防丢失。
+  handle.addEventListener('mousedown', function(e) {
+    if (e.button !== 0) return;
+    e.preventDefault();
+    const input = ctx.inputEl;
+    const startY = e.clientY;
+    const startH = input.getBoundingClientRect().height;
+    const maxH = Math.floor(window.innerHeight * 0.6);
+    let moved = false;
+    handle.classList.add('dragging');
+    document.body.classList.add('input-resizing');
+
+    function onMove(ev) {
+      moved = true;
+      const h = Math.min(Math.max(Math.round(startH - (ev.clientY - startY)), INPUT_MANUAL_MIN_H), maxH);
+      ctx.inputManualH = h;
+      input.style.maxHeight = 'none';   // 手动高度可以超过自动上限
+      input.style.height = h + 'px';
+    }
+    function onUp() {
+      handle.classList.remove('dragging');
+      document.body.classList.remove('input-resizing');
+      window.removeEventListener('mousemove', onMove);
+      window.removeEventListener('mouseup', onUp);
+      if (!moved) return;               // 纯点击（含双击的第一击）不改状态、不写存储
+      _saveManualInputH(ctx.inputManualH);
+      _syncInputHeightToAllSessions(ctx);
+      input.focus();
+    }
+    window.addEventListener('mousemove', onMove);
+    window.addEventListener('mouseup', onUp);
+  });
+
+  handle.addEventListener('dblclick', function() {
+    ctx.inputManualH = null;
+    _saveManualInputH(null);
+    ctx.inputEl.style.height = '';
+    ctx.inputEl.style.maxHeight = '';
+    ctx.inputEl.dispatchEvent(new Event('input'));  // 触发一次自增高，回到当前内容应有的高度
+    _syncInputHeightToAllSessions(ctx);
+  });
+
+  _applyManualInputH(ctx);
+}
+
+// 输入区高度是全局设置（localStorage 记忆）；已创建的各会话 DOM 也立即同步，不等刷新
+function _syncInputHeightToAllSessions(src) {
+  for (const c of sessionCtxs.values()) {
+    if (c === src) continue;
+    if (src.inputManualH != null) {
+      c.inputManualH = src.inputManualH;
+      c.inputEl.style.maxHeight = 'none';
+      c.inputEl.style.height = src.inputManualH + 'px';
+    } else {
+      c.inputManualH = null;
+      c.inputEl.style.height = '';
+      c.inputEl.style.maxHeight = '';
+      c.inputEl.dispatchEvent(new Event('input'));
+    }
+  }
+}
+
+function _saveManualInputH(h) {
+  try {
+    if (h == null) localStorage.removeItem(INPUT_MANUAL_KEY);
+    else localStorage.setItem(INPUT_MANUAL_KEY, String(Math.round(h)));
+  } catch {}
+}
+
+function _applyManualInputH(ctx) {
+  let raw = null;
+  try { raw = localStorage.getItem(INPUT_MANUAL_KEY); } catch {}
+  if (raw == null) return;
+  const h = parseInt(raw, 10);
+  if (!Number.isFinite(h)) return;
+  ctx.inputManualH = Math.min(Math.max(h, INPUT_MANUAL_MIN_H), Math.floor(window.innerHeight * 0.6));
+  ctx.inputEl.style.maxHeight = 'none';
+  ctx.inputEl.style.height = ctx.inputManualH + 'px';
 }
 
 function _attachSessionListeners(ctx) {
@@ -116,11 +212,13 @@ function _attachSessionListeners(ctx) {
       else this.value = messageHistory[messageHistory.length - 1 - historyIndex];
     }
   });
-  // Auto-resize textarea
+  // Auto-resize textarea（手动拖拽模式下不生效）
   ctx.inputEl.addEventListener('input', function() {
+    if (ctx.inputManualH != null) return;
     this.style.height = 'auto';
-    this.style.height = Math.min(this.scrollHeight, 120) + 'px';
+    this.style.height = Math.min(this.scrollHeight, INPUT_MAX_H) + 'px';
   });
+  _bindInputResizeHandle(ctx);
   // 权限模式 / 模型：改动后立即保存到当前对话
   ctx.modeSelect.addEventListener('change', function() {
     saveSessionSetting(ctx, 'mode', this.value);
