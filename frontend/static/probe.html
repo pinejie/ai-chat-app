@@ -1,0 +1,160 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>语音能力探测（泛微 WebView）</title>
+<style>
+  body{font-family:-apple-system,sans-serif;margin:0;padding:14px;background:#f5f6f8;color:#222;max-width:640px}
+  h3{margin:6px 0 10px}
+  .btn{display:block;width:100%;padding:14px;margin:10px 0;border:none;border-radius:10px;background:#2563eb;color:#fff;font-size:16px;text-align:left}
+  .btn.gray{background:#64748b}
+  .btn:disabled{opacity:.5}
+  #env{background:#fff;border:1px solid #ddd;border-radius:10px;padding:10px;font-size:12px;word-break:break-all;margin-bottom:8px}
+  #log{background:#111;color:#9fdc9f;padding:10px;border-radius:10px;font-size:12px;white-space:pre-wrap;word-break:break-all;min-height:120px}
+  .tip{font-size:13px;color:#555;background:#fff;border-left:4px solid #f59e0b;padding:8px 10px;border-radius:6px;margin-bottom:8px}
+</style>
+</head>
+<body>
+<h3>语音能力探测</h3>
+<div class="tip">在<b>泛微 App 里点开本页</b>（不要用浏览器）→ 依次点 A、B 两个按钮 → 把整页截图发给开发。本页只测能力，不存任何数据。</div>
+<div id="env"></div>
+<button class="btn" id="btnA">A · 网页录音测试（点完自动录 3 秒，需对手机说句话）</button>
+<button class="btn" id="btnB">B · 系统录音器（会跳到手机自带录音界面，录完自动识别）</button>
+<button class="btn gray" id="btnApi">扫描泛微注入的 JS 接口</button>
+<input type="file" id="fileIn" accept="audio/*" style="display:none">
+<pre id="log"></pre>
+<script>
+// 全 ES5：泛微内嵌 WebView 可能很旧，arrow/const/可选链都可能直接白屏
+(function(){
+  var logEl = document.getElementById('log');
+  function log(s){
+    var t = new Date();
+    var p = function(n){ return (n<10?'0':'')+n; };
+    logEl.textContent = '[' + p(t.getHours()) + ':' + p(t.getMinutes()) + ':' + p(t.getSeconds()) + '] ' + s + '\n' + logEl.textContent;
+  }
+  function ok(name, cond){ log((cond?'✅':'❌') + ' ' + name); }
+
+  // ── 环境信息 ──
+  var env = document.getElementById('env');
+  env.textContent = 'UA: ' + navigator.userAgent + '\n'
+    + '地址: ' + location.href + '\n'
+    + '安全上下文(HTTPS): ' + (window.isSecureContext ? '是' : '否');
+  log('== 能力自检 ==');
+  var hasMD = !!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia) || !!navigator.webkitGetUserMedia;
+  ok('网页录音接口 getUserMedia 存在', hasMD);
+  ok('MediaRecorder 存在', !!window.MediaRecorder);
+  var mimes = ['audio/webm;codecs=opus','audio/webm','audio/mp4','audio/m4a','audio/aac','audio/mpeg'];
+  if (window.MediaRecorder) {
+    var supported = [];
+    for (var i=0;i<mimes.length;i++){ try{ if (MediaRecorder.isTypeSupported(mimes[i])) supported.push(mimes[i]); }catch(e){} }
+    ok('可用的录音编码格式', supported.length > 0);
+    log('支持列表: ' + (supported.join(' , ') || '（无）'));
+  }
+
+  // ── 上传并识别（走后端 /api/asr，需已登录主应用：cookie 同域共享）──
+  function uploadAndTranscribe(blob, name){
+    log('上传识别中… (' + name + ', ' + blob.size + ' 字节)');
+    var fd = new FormData();
+    fd.append('file', blob, name);
+    fetch('/api/asr', { method: 'POST', body: fd })
+      .then(function(r){
+        return r.json().then(function(j){
+          if (r.status === 401) throw new Error('未登录(401)——先在泛微里打开 ai-chat-app 主菜单登录一次再回来');
+          if (!r.ok) throw new Error(j.detail || ('HTTP ' + r.status));
+          return j;
+        });
+      })
+      .then(function(j){
+        log('🎯 识别结果：「' + (j.text || '空——确认刚才说了话') + '」' + (j.truncated ? '（超60秒已截断）' : ''));
+      })
+      .catch(function(e){ log('❌ 上传/识别失败：' + e.message); });
+  }
+
+  // ── 路径 A：getUserMedia + MediaRecorder 网页录音 ──
+  document.getElementById('btnA').addEventListener('click', function(){
+    var btn = this;
+    btn.disabled = true;
+    log('== A · 网页录音（3 秒，请说话）==');
+    var getUserMedia = (navigator.mediaDevices && navigator.mediaDevices.getUserMedia)
+      ? function(c){ return navigator.mediaDevices.getUserMedia(c); }
+      : (navigator.webkitGetUserMedia
+          ? function(c){ return new Promise(function(res, rej){ navigator.webkitGetUserMedia(c, res, rej); }); }
+          : null);
+    if (!getUserMedia){ log('❌ 没有 getUserMedia，A 路径不可用'); btn.disabled = false; return; }
+    getUserMedia({ audio: true }).then(function(stream){
+      log('✅ 麦克风授权成功（泛微放行了这个 WebView）');
+      var chunks = [], mime = '';
+      var tryMimes = ['audio/webm;codecs=opus','audio/mp4','audio/webm'];
+      for (var k=0;k<tryMimes.length;k++){ if (MediaRecorder.isTypeSupported(tryMimes[k])){ mime = tryMimes[k]; break; } }
+      var rec = mime ? new MediaRecorder(stream, { mimeType: mime }) : new MediaRecorder(stream);
+      rec.ondataavailable = function(e){ if (e.data && e.data.size) chunks.push(e.data); };
+      rec.onstop = function(){
+        stream.getTracks().forEach(function(t){ t.stop(); });
+        var blob = new Blob(chunks, { type: mime || 'audio/webm' });
+        log('录音完成：' + blob.size + ' 字节, ' + (mime||'默认'));
+        if (blob.size < 1000) { log('❌ 录音过小，可能没录到'); return; }
+        var ext = blob.type.indexOf('mp4') > -1 ? '.m4a' : '.webm';
+        uploadAndTranscribe(blob, 'probeA' + ext);
+        btn.disabled = false;
+      };
+      var left = 3;
+      btn.textContent = 'A · 录音中… ' + left;
+      var tk = setInterval(function(){
+        left--;
+        if (left > 0) { btn.textContent = 'A · 录音中… ' + left; return; }
+        clearInterval(tk); btn.textContent = 'A · 网页录音测试（点完自动录 3 秒，需对手机说句话）';
+        rec.stop();
+      }, 1000);
+      rec.start();
+    }).catch(function(e){
+      log('❌ A 路径失败：' + (e && e.name) + ' ' + (e && e.message));
+      if (e && (e.name === 'NotAllowedError' || e.name === 'SecurityError')) log('→ 大概率是泛微 App 没放行录音权限（或非安全上下文）。请改测 B 路径');
+      btn.disabled = false;
+    });
+  });
+
+  // ── 路径 B：系统录音器（input file，OA 附件同款，基本必通）──
+  var fileIn = document.getElementById('fileIn');
+  fileIn.addEventListener('change', function(){
+    var f = this.files && this.files[0];
+    if (!f){ log('未选择/未录制文件'); return; }
+    log('== B · 拿到文件 ==');
+    log('文件：' + f.name + ' ' + f.type + ' ' + f.size + ' 字节');
+    uploadAndTranscribe(f, f.name || 'probeB.bin');
+    this.value = '';
+  });
+  document.getElementById('btnB').addEventListener('click', function(){
+    log('== B · 唤起系统录音/选择界面 ==');
+    try { fileIn.click(); } catch(e){ log('❌ 无法唤起：' + e.message); }
+  });
+
+  // ── 泛微 JS-SDK 扫描 ──
+  document.getElementById('btnApi').addEventListener('click', function(){
+    log('== 扫描宿主注入的接口 ==');
+    var named = ['weapp','wcode','ecode','ecodeSdk','$weapp','weaver','WeaverJSBridge','JSBridge','dsBridge','WebViewJavascriptBridge'];
+    var found = [];
+    for (var i=0;i<named.length;i++){ if (window[named[i]]) found.push(named[i]); }
+    // iOS WKWebView messageHandlers
+    if (window.webkit && window.webkit.messageHandlers) {
+      var mh = [];
+      try { for (var k in window.webkit.messageHandlers) mh.push(k); } catch(e){}
+      if (mh.length) found.push('messageHandlers[' + mh.join(',') + ']');
+    }
+    // 遍历 window 找可疑名字
+    var suspicious = [];
+    try {
+      for (var key in window) {
+        if (/rec|voice|record|weaver|fanwei|e10|ecode|bridge/i.test(key)) suspicious.push(key);
+        if (suspicious.length > 40) break;
+      }
+    } catch(e){}
+    log('命中全局对象：' + (found.length ? found.join(' , ') : '（无）'));
+    log('可疑 window 属性：' + (suspicious.length ? suspicious.slice(0,40).join(' , ') : '（无）'));
+  });
+
+  log('页面就绪。先点 A，再点 B（B 里选"录音"），完成后整页截图。');
+})();
+</script>
+</body>
+</html>

@@ -369,3 +369,14 @@ hr{border:none;border-top:1px solid var(--border);margin:12px 0}
 .docs-viewer-body img{display:block;margin:4px 0}
 .docs-empty{font-size:12.5px;color:var(--text5);padding:6px 2px}
 .attach-thumb{width:36px;height:36px;object-fit:cover;border-radius:6px;flex:none}
+
+/* ── 语音输入（voice.js，P3） ── */
+/* 平时与附件图标同色不抢视觉；录音中整钮变红+脉冲，状态一眼可辨（R4：无 hover，靠颜色+动画） */
+.icon-btn.voice{color:var(--text3)}
+.icon-btn.voice.recording{background:var(--danger);color:#fff;border-radius:12px;
+  animation:voice-pulse 1.2s ease-in-out infinite}
+.icon-btn.voice.busy{opacity:.5}
+@keyframes voice-pulse{0%,100%{opacity:1}50%{opacity:.55}}
+@media (prefers-reduced-motion:reduce){.icon-btn.voice.recording{animation:none}}
+/* 录音/识别状态提示行；.hidden 负责显隐 */
+.voice-hint{padding:2px 2px 4px;font-size:12px;color:var(--danger2);text-align:center}
