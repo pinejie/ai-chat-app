@@ -107,6 +107,7 @@
         // 若趁隐藏态（display:none，scrollHeight=0）去量会把输入框压塌，文字只剩下半截可见
         setVoiceMode(false);
         appendText(text);                          // 回填后由用户编辑确认再发
+        MUI.lastAsr = { recognized: text, ts: Date.now() };   // 供 mobile.js 发送时比对「用户改了哪些字」
         MUI.toast(j.truncated ? '已识别（超 60 秒部分被截断）' : '识别完成，可编辑后发送');
       })
       .catch(function (e) {
@@ -256,4 +257,58 @@
     if (state === 'recording') { return; }         // 手指应在大条上，理论到不了这里，防御
     setVoiceMode(!voiceMode);
   });
+
+  /* ---------------- 已学热词面板（透明排气阀） ----------------
+     数据由后端从「识别 vs 发送」差值自动学习，用户无需也无需手动添加；
+     面板只做两件事：看得见学了什么、删掉学错的（删除后永不再学）。 */
+
+  const btnLearned = document.getElementById('btnLearnedHotwords');
+  const hwSheet = document.getElementById('hotwordsSheet');
+  const hwList = document.getElementById('hotwordsList');
+  const hwClose = document.getElementById('btnCloseHotwords');
+
+  function renderLearned(words) {
+    const list = Object.keys(words).sort();
+    hwList.innerHTML = '';
+    if (!list.length) {
+      const e = document.createElement('div'); e.className = 'hw-empty';
+      e.textContent = '还没学到词。识别出错时改好文字再发送，同样的错第二次就会被记住。';
+      hwList.appendChild(e);
+      return;
+    }
+    list.forEach(function (w) {
+      const row = document.createElement('div'); row.className = 'hw-item';
+      const name = document.createElement('span'); name.className = 'hw-word'; name.textContent = w;
+      const del = document.createElement('button');
+      del.type = 'button'; del.className = 'hw-del'; del.textContent = '删除';
+      del.addEventListener('click', function () {
+        del.disabled = true;
+        fetch('/api/asr/hotwords/' + encodeURIComponent(w), { method: 'DELETE' })
+          .then(function (r) { if (!r.ok) { throw new Error('HTTP ' + r.status); } return r.json(); })
+          .then(function () { row.remove(); MUI.toast('已删除，不会再自动学「' + w + '」'); })
+          .catch(function () { del.disabled = false; MUI.toast('删除失败', true); });
+      });
+      row.appendChild(name); row.appendChild(del);
+      hwList.appendChild(row);
+    });
+  }
+
+  function loadLearned() {
+    hwList.innerHTML = '<div class="hw-empty">加载中…</div>';
+    fetch('/api/asr/hotwords/learned')
+      .then(function (r) { if (!r.ok) { throw new Error('HTTP ' + r.status); } return r.json(); })
+      .then(function (j) { renderLearned(j.hotwords || {}); })
+      .catch(function () { hwList.innerHTML = '<div class="hw-empty">加载失败，请重开面板</div>'; });
+  }
+
+  if (btnLearned && hwSheet && hwList && hwClose) {
+    btnLearned.addEventListener('click', function () {
+      const bcd = document.getElementById('btnCloseDrawer');
+      if (bcd) bcd.click();                       // 先收抽屉，弹层不被遮住
+      hwSheet.classList.remove('hidden');
+      loadLearned();
+    });
+    hwClose.addEventListener('click', function () { hwSheet.classList.add('hidden'); });
+    hwSheet.addEventListener('click', function (e) { if (e.target === hwSheet) hwSheet.classList.add('hidden'); });
+  }
 })();

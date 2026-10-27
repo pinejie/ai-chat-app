@@ -878,6 +878,18 @@
       return;
     }
 
+    // 隐式纠错学习：识别回填后 5 分钟内改动文字再发送 = 免费的人工标注。
+    // 后台上报，成败都不许影响发送本身；一次识别只配一次上报
+    if (MUI.lastAsr) {
+      const la = MUI.lastAsr; MUI.lastAsr = null;
+      if (Date.now() - la.ts <= 5 * 60 * 1000 && text !== la.recognized) {
+        fetch('/api/asr/feedback', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ recognized: la.recognized, final: text }),
+        }).catch(function () { /* 尽力而为 */ });
+      }
+    }
+
     picked = []; renderAttachBar();
     el.input.value = ''; MUI.syncInput();
     addUserMsg(text);

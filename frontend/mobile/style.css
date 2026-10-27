@@ -403,3 +403,15 @@ hr{border:none;border-top:1px solid var(--border);margin:12px 0}
 /* 上滑进入取消区：红底（对应文案「松手 取消」） */
 .hold-talk.cancel{background:var(--danger);color:#fff}
 .hold-talk.busy{opacity:.5;pointer-events:none}
+
+/* ---- 已学热词面板（同音纠错自动学习，voice.js）：复用 sheet 骨架，只加列表项 ---- */
+.hw-note{margin:0 0 10px;font-size:12px;line-height:1.6;color:var(--text5)}
+.hw-list{max-height:min(46vh,320px);overflow-y:auto;display:flex;flex-direction:column;gap:6px;margin-bottom:10px}
+.hw-item{display:flex;align-items:center;justify-content:space-between;gap:10px;
+  padding:9px 12px;background:var(--bg3);border:1px solid var(--border2);border-radius:10px}
+.hw-word{font-size:14px;color:var(--text);word-break:break-all}
+.hw-del{flex:none;border:none;background:transparent;color:var(--danger);font-size:13px;
+  font-family:inherit;cursor:pointer;padding:4px 8px;border-radius:8px}
+.hw-del:active{background:var(--bg4)}
+.hw-del:disabled{opacity:.5}
+.hw-empty{padding:18px 10px;text-align:center;font-size:13px;color:var(--text5)}

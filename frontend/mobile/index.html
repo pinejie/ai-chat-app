@@ -8,7 +8,7 @@
 <meta name="theme-color" content="#0a0a0f">
 <title>ZD Code</title>
 <!-- 移动端独立样式（§3.1 D1）；设计令牌取值沿用 PC，保证「同一个工具」的识别（§6） -->
-<link rel="stylesheet" href="style.css?v=1793081525">
+<link rel="stylesheet" href="style.css?v=1793083122">
 <!-- 第三方库不复制，引用 /static 下的本地打包件（§3.1 缓解措施） -->
 <link rel="stylesheet" href="/static/highlight-theme-dark.css" id="hljsTheme">
 </head>
@@ -175,6 +175,10 @@
         <button class="seg-item" data-theme="light" type="button" role="radio">浅色</button>
         <button class="seg-item" data-theme="warm" type="button" role="radio">暖色</button>
       </div>
+
+      <div class="drawer-label">语音</div>
+      <!-- 自动学习的同音纠错热词，只读+删除，无手动添加（voice.js） -->
+      <button id="btnLearnedHotwords" class="drawer-row" type="button">已学热词（自动纠错）</button>
     </div>
   </div>
 
@@ -205,6 +209,16 @@
   </div>
 </div>
 
+<!-- 已学热词面板：识别听错→改字发送→自动学会；删掉的词永不再学（voice.js） -->
+<div id="hotwordsSheet" class="sheet hidden" role="dialog" aria-label="已学语音热词" aria-modal="true">
+  <div class="sheet-panel">
+    <div class="sheet-title">已学语音热词</div>
+    <div class="hw-note">识别出错时，把文字改对再发送，同样的错到第二次就会自动学会，下次不再犯。删除某个词后它不会再被自动学习。</div>
+    <div id="hotwordsList" class="hw-list"></div>
+    <button id="btnCloseHotwords" class="btn-ghost" type="button">关闭</button>
+  </div>
+</div>
+
 <!-- 依赖：三个库都从 /static 取，移动端不复制（§3.1 缓解措施）。
      marked 原本是 CDN 加载，现改为本地文件 —— 移动端不能依赖公网 CDN，
      出口被限或泛微 WebView 拦外域脚本时，消息渲染会整片空白。 -->
@@ -213,9 +227,9 @@
 <script src="/static/js/purify.min.js"></script>
 <script src="js/ui.js?v=1793081525"></script>
 <!-- 协议层：鉴权探测、会话、WebSocket 收发、消息渲染、文档只读浏览 -->
-<script src="js/mobile.js?v=1793081525"></script>
+<script src="js/mobile.js?v=1793083122"></script>
 <!-- 语音输入：🎤 录音 + /api/asr 识别回填，只依赖 MUI，与协议层互不干涉 -->
-<script src="js/voice.js?v=1793081525"></script>
+<script src="js/voice.js?v=1793083122"></script>
 
 </body>
 </html>
