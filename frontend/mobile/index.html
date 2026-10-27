@@ -8,7 +8,7 @@
 <meta name="theme-color" content="#0a0a0f">
 <title>ZD Code</title>
 <!-- 移动端独立样式（§3.1 D1）；设计令牌取值沿用 PC，保证「同一个工具」的识别（§6） -->
-<link rel="stylesheet" href="style.css?v=1793066710">
+<link rel="stylesheet" href="style.css?v=1793081525">
 <!-- 第三方库不复制，引用 /static 下的本地打包件（§3.1 缓解措施） -->
 <link rel="stylesheet" href="/static/highlight-theme-dark.css" id="hljsTheme">
 </head>
@@ -100,7 +100,18 @@
     <!-- 录音/识别状态提示（voice.js 控制显隐），常驻一行文字的位置，不遮输入框 -->
     <div id="voiceHint" class="voice-hint hidden" aria-live="polite"></div>
     <div class="input-box">
+      <!-- 语音模式开关（微信同款：输入框左侧切换）：点 🎤 切「按住说话」，再点键盘图标切回文字（voice.js） -->
+      <button id="btnVoice" class="icon-btn voice" type="button" aria-label="语音输入">
+        <svg class="ic-mic" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 1a3 3 0 00-3 3v8a3 3 0 006 0V4a3 3 0 00-3-3z"/><path d="M19 10v2a7 7 0 01-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/></svg>
+        <svg class="ic-kbd hidden" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="6" width="20" height="12" rx="2"/><path d="M6 10h.01M10 10h.01M14 10h.01M18 10h.01M6 14h.01M10 14h.01M14 14h.01M18 14h.01M9 17h6"/></svg>
+      </button>
+      <!-- 与附件同款通道：accept=audio/* 唤起系统录音/选音界面；不加 capture 保留全部选项 -->
+      <input id="mVoiceFile" type="file" accept="audio/*" hidden>
       <textarea id="mInput" class="input" rows="1" placeholder="输入消息…"></textarea>
+      <!-- 微信式语音输入：语音模式下整条替换输入框。按住录音、松开识别、上滑取消（voice.js） -->
+      <div id="mHoldTalk" class="hold-talk hidden" role="button" tabindex="0" aria-label="按住说话">按住 说话</div>
+      <!-- 一键清空（触屏没有全选删除）：输入框有内容才出现，语音大条态自动隐藏（ui.js syncInput 控制） -->
+      <button id="btnClear" class="icon-btn clear hidden" type="button" aria-label="清空输入">✕</button>
       <div class="input-actions">
         <!-- 不加 capture：加了会禁掉相册选择、只留拍照，反而更窄 -->
         <label class="icon-btn" for="mFileInput" aria-label="添加附件">
@@ -109,12 +120,6 @@
         <!-- R7：附件能否唤起系统选择器取决于泛微 WebView，实测不通则此项无副作用 -->
         <input id="mFileInput" type="file" multiple hidden
                accept="image/*,.pdf,.txt,.md,.py,.js,.ts,.java,.json,.csv">
-        <!-- 语音输入：点一下开始录音、再点停止；网页录音被泛微拒时自动转系统录音器（voice.js） -->
-        <button id="btnVoice" class="icon-btn voice" type="button" aria-label="语音输入">
-          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 1a3 3 0 00-3 3v8a3 3 0 006 0V4a3 3 0 00-3-3z"/><path d="M19 10v2a7 7 0 01-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/></svg>
-        </button>
-        <!-- 与附件同款通道：accept=audio/* 唤起系统录音/选音界面；不加 capture 保留全部选项 -->
-        <input id="mVoiceFile" type="file" accept="audio/*" hidden>
         <!-- 停止按钮常显，不靠 hover 显现（R4：触屏无 hover） -->
         <button id="btnStop" class="icon-btn stop hidden" type="button" aria-label="停止生成">■</button>
         <button id="btnSend" class="icon-btn send" type="button" aria-label="发送">➤</button>
@@ -206,11 +211,11 @@
 <script src="/static/js/marked.min.js"></script>
 <script src="/static/js/highlight.min.js"></script>
 <script src="/static/js/purify.min.js"></script>
-<script src="js/ui.js?v=1792734655"></script>
+<script src="js/ui.js?v=1793081525"></script>
 <!-- 协议层：鉴权探测、会话、WebSocket 收发、消息渲染、文档只读浏览 -->
-<script src="js/mobile.js?v=1792805812"></script>
+<script src="js/mobile.js?v=1793081525"></script>
 <!-- 语音输入：🎤 录音 + /api/asr 识别回填，只依赖 MUI，与协议层互不干涉 -->
-<script src="js/voice.js?v=1793066710"></script>
+<script src="js/voice.js?v=1793081525"></script>
 
 </body>
 </html>

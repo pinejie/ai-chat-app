@@ -84,6 +84,12 @@ body{height:var(--vvh);overflow:hidden;background:var(--bg);color:var(--text);
   font-size:16px;cursor:pointer;font-family:inherit}
 .icon-btn:active{background:var(--bg3);color:var(--text)}
 .icon-btn.send{color:var(--accent2)}
+/* 一键清空：圆形灰底小✕，输入框有内容才出现（触屏无全选删除的补救）。
+   26px 贴最后一行居中：单行时 textarea 内容中线≈21px 高，(42.5-26)/2≈8 的 bottom margin 对齐 */
+.icon-btn.clear{width:26px;height:26px;flex:none;margin:0 2px 8px;border:none;padding:0;border-radius:50%;
+  background:var(--bg3);color:var(--text5);font-size:13px;line-height:1;
+  display:inline-flex;align-items:center;justify-content:center;cursor:pointer}
+.icon-btn.clear:active{background:var(--bg4);color:var(--text)}
 /* 生成中的「■ 停止」：红色实心，对齐 PC .stop-btn 语义——灰色易被当成禁用态 */
 .icon-btn.stop{color:#fff;background:var(--danger);border-radius:12px}
 .icon-btn.stop:active{background:#b91c1c;color:#fff}
@@ -373,6 +379,7 @@ hr{border:none;border-top:1px solid var(--border);margin:12px 0}
 /* ── 语音输入（voice.js，P3） ── */
 /* 平时与附件图标同色不抢视觉；录音中整钮变红+脉冲，状态一眼可辨（R4：无 hover，靠颜色+动画） */
 .icon-btn.voice{color:var(--text3)}
+.icon-btn.voice.active{color:var(--accent2)}   /* 语音模式开启（此时显示键盘图标）*/
 .icon-btn.voice.recording{background:var(--danger);color:#fff;border-radius:12px;
   animation:voice-pulse 1.2s ease-in-out infinite}
 .icon-btn.voice.busy{opacity:.5}
@@ -380,3 +387,19 @@ hr{border:none;border-top:1px solid var(--border);margin:12px 0}
 @media (prefers-reduced-motion:reduce){.icon-btn.voice.recording{animation:none}}
 /* 录音/识别状态提示行；.hidden 负责显隐 */
 .voice-hint{padding:2px 2px 4px;font-size:12px;color:var(--danger2);text-align:center}
+
+/* ── 微信式「按住 说话」大条（语音模式替换输入框；三态靠颜色+文案，R4 无 hover） ── */
+/* 静止：与输入框同尺寸、居中灰字；touch-action:none + 禁选中，长按不触发滚动/选词/系统菜单 */
+.hold-talk{flex:1;min-width:0;align-self:stretch;display:flex;align-items:center;justify-content:center;
+  margin:6px 0;padding:0 10px;font-size:15px;font-weight:600;color:var(--text);cursor:pointer;
+  border-radius:12px;background:transparent;user-select:none;-webkit-user-select:none;
+  -webkit-touch-callout:none;touch-action:none;transition:background .12s,color .12s}
+.hold-talk:focus{outline:none}
+/* 按下待启动（授权/设备就绪的空窗期）：灰底，证明「按住了」 */
+.hold-talk.armed{background:var(--bg3)}
+/* 按住录音中：蓝底白字 + 呼吸微亮，不看屏幕也能确认「在录」 */
+.hold-talk.recording{background:var(--accent);color:#fff;animation:hold-pulse 1.6s ease-in-out infinite}
+@keyframes hold-pulse{0%,100%{filter:brightness(1)}50%{filter:brightness(1.28)}}
+/* 上滑进入取消区：红底（对应文案「松手 取消」） */
+.hold-talk.cancel{background:var(--danger);color:#fff}
+.hold-talk.busy{opacity:.5;pointer-events:none}
