@@ -879,7 +879,7 @@
     }
 
     picked = []; renderAttachBar();
-    el.input.value = ''; MUI.autoGrow();
+    el.input.value = ''; MUI.syncInput();
     addUserMsg(text);
     streamText = ''; streamThink = ''; streamEl = null;
     setGenerating(true);

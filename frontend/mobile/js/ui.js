@@ -24,7 +24,7 @@
     btnTheme: $('btnTheme'), themeSeg: $('mThemeSeg'), modeSeg: $('mModeSeg'),
     btnModel: $('btnModel'), sheet: $('modelSheet'), btnCloseSheet: $('btnCloseSheet'),
     btnDocs: $('btnDocs'), docsPane: $('docsPane'),
-    input: $('mInput'), messages: $('mMessages'), msgList: $('mMsgList'),
+    input: $('mInput'), btnClear: $('btnClear'), messages: $('mMessages'), msgList: $('mMsgList'),
     empty: $('emptyState'), thinking: $('thinking'), toast: $('toast'),
     // 以下由第 2 步的 mobile.js 使用，统一在此注册，避免两个文件各拿一半
     btnSend: $('btnSend'), btnStop: $('btnStop'), mFileInput: $('mFileInput'),
@@ -168,8 +168,24 @@
     el.input.style.height = Math.min(el.input.scrollHeight, MAX_INPUT_H) + 'px';
   }
 
+  // 高度自适应 + 清空钮显隐，一次调用同步输入框全部派生状态。
+  // 凡程序化改 input.value 的地方（输入、语音回填、发送清空、模式切换）必须走它，
+  // 只调 autoGrow 会让清空钮和输入框内容脱节
+  function syncInput() {
+    autoGrow();
+    if (el.btnClear) {
+      // 语音大条态下输入框整个隐藏，清空钮跟着藏，回到文字态再按内容恢复
+      el.btnClear.classList.toggle('hidden', !el.input.value || el.input.classList.contains('hidden'));
+    }
+  }
+
   function bindInput() {
-    el.input.addEventListener('input', autoGrow);
+    el.input.addEventListener('input', syncInput);
+    // 触屏键盘没有「全选删除」，内容一多只能一个键一个键抠——这个 ✕ 就是补救。
+    // 清空后焦点还给输入框，可以接着重新打
+    if (el.btnClear) el.btnClear.addEventListener('click', function () {
+      el.input.value = ''; syncInput(); el.input.focus();
+    });
     // 回车发送、Shift+回车换行。触屏键盘没有 Shift，所以 enterkeyhint 保留换行能力靠
     // 输入法自身；这里仅在非 composing 状态发送，避免中文输入法选词时误发
     el.input.addEventListener('keydown', function (e) {
@@ -259,7 +275,7 @@
     setDrawer: setDrawer, closeSheet: closeSheet,
     setLoginVisible: setLoginVisible, setRenameVisible: setRenameVisible,
     isComposing: isComposing,
-    syncViewport: syncViewport, autoGrow: autoGrow,
+    syncViewport: syncViewport, autoGrow: autoGrow, syncInput: syncInput,
     scrollToBottom: scrollToBottom, setEmptyVisible: setEmptyVisible,
     setThinking: setThinking, toast: toast, markSeg: markSeg,
   };
