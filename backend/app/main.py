@@ -18,6 +18,8 @@ from fastapi.staticfiles import StaticFiles
 
 from app import workspace_registry as wsreg
 from app import asr_service
+from app import asr_learner
+from pydantic import BaseModel
 from app.claude_session import ClaudeSession
 from app.session_store import SessionStore
 
@@ -284,6 +286,45 @@ async def asr_transcribe(file: UploadFile = File(...)):
     except asr_service.AsrError as e:
         # 业务失败（未配置/解码失败/连不上/超时）：422 让前端把原因原样透传给用户
         raise HTTPException(422, str(e))
+
+
+class AsrFeedback(BaseModel):
+    """隐式纠错打点：识别文本 vs 用户实际发送文本。"""
+    recognized: str
+    final: str
+
+
+@app.post("/api/asr/feedback")
+async def asr_feedback(fb: AsrFeedback):
+    """语音识别回填后用户改了字又发送 → 差值就是人工标注，交给学习模块判定。
+    返回本次晋级的热词（通常为空——晋级要累计满 2 次），前端无需展示。"""
+    rec = fb.recognized[:asr_learner.MAX_TEXT_LEN]
+    fin = fb.final[:asr_learner.MAX_TEXT_LEN]
+    if not rec.strip() or not fin.strip():
+        raise HTTPException(400, "内容不能为空")
+    try:
+        promoted = await asyncio.to_thread(asr_learner.record, rec, fin)
+    except asr_learner.LearnerError as e:
+        raise HTTPException(500, f"学习状态存储异常：{e}")
+    return {"accepted": True, "promoted": promoted}
+
+
+@app.get("/api/asr/hotwords/learned")
+async def asr_hotwords_learned():
+    """已学热词列表（透明排气阀的前端数据源）。"""
+    return {"hotwords": asr_learner.learned_words()}
+
+
+@app.delete("/api/asr/hotwords/{word}")
+async def asr_hotwords_delete(word: str):
+    """删除已学词并永久拉黑：该词不会再被自动学起。"""
+    word = word.strip()
+    if not word:
+        raise HTTPException(400, "热词不能为空")
+    ok = await asyncio.to_thread(asr_learner.delete_learned, word)
+    if not ok:
+        raise HTTPException(404, "该词不在已学列表中")
+    return {"ok": True}
 
 # ─── Routes: Sessions ─────────────────────────────────────────────────────────
 

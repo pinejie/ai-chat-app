@@ -15,6 +15,9 @@
   ASR_MAX_CONCURRENCY 本端并发上限，默认 6（服务端 8 路，留余量）
   ASR_HOTWORDS_FILE   热词表文件，默认 backend/hotwords.txt；每行「词 [权重]」，
                       # 注释与空行忽略；按 mtime 缓存，改文件下次请求即生效
+  ASR_LEARNED_FILE    自动学习热词文件，默认 backend/learned_hotwords.json（见 asr_learner）
+
+每次请求上传的热词 = 人工名单 ∪ 已学词；同词人工权重(20)赢自动权重(10)。
 """
 import asyncio
 import json
@@ -24,6 +27,8 @@ import uuid
 from pathlib import Path
 
 import httpx
+
+from app import asr_learner
 
 logger = logging.getLogger(__name__)
 
@@ -115,6 +120,18 @@ def _load_hotwords(spec: str) -> dict[str, int]:
     return words
 
 
+def compose_hotwords(hotwords_file: str) -> dict[str, int]:
+    """人工名单与自动学习词合并：学到的打底，人工同名覆盖（权重更高为准）。
+    学习模块的任何异常不许拖垮识别本身——兜底成「没有学习词」。"""
+    try:
+        words = dict(asr_learner.learned_words())
+    except Exception as e:   # noqa: BLE001 防御性兜底，学习是锦上添花
+        logger.warning("已学热词加载失败（本次不带）: %s", e)
+        words = {}
+    words.update(_load_hotwords(hotwords_file))
+    return words
+
+
 def _hotwords_json(words: dict[str, int]) -> str:
     """组装网关要求的 JSON 权重格式（空表返回空串，不带该字段）。"""
     if not words:
@@ -136,7 +153,7 @@ def _status_error(code: int, detail: str) -> AsrError:
 async def _http_transcribe(cfg: dict, wav: bytes) -> str:
     """一次 multipart POST 整段转写，返回识别文本。"""
     form = {"itn": "true"}
-    hw = _hotwords_json(_load_hotwords(cfg["hotwords_file"]))
+    hw = _hotwords_json(compose_hotwords(cfg["hotwords_file"]))
     if hw:
         form["hotwords"] = hw
     async with httpx.AsyncClient(

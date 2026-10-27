@@ -12,3 +12,4 @@ _verify*.sh
 *.log
 verify-after-restart.txt
 backend/hotwords.txt
+backend/learned_hotwords.json
