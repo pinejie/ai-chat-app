@@ -5,7 +5,6 @@
 set -euo pipefail
 
 DIR="$(cd "$(dirname "$0")" && pwd)"
-ENVFILE="$DIR/backend/.env"
 PYTHON="$DIR/.venv/bin/python"
 
 # Claude CLI 装在 ~/bin，而 systemd 服务默认 PATH 不含该目录；不补上则后端
@@ -16,14 +15,5 @@ if ! command -v claude >/dev/null 2>&1; then
   exit 1
 fi
 
-# 反代可信来源(uvicorn --forwarded-allow-ips)：只接受这些 IP 转发的 X-Forwarded-* 头。
-# 沿用原 ai-chat-app.sh 的读取逻辑，.env 仍是唯一配置源，systemd 单元里不写死任何 IP。
-TRUSTED_PROXY_IPS="127.0.0.1"
-if [ -f "$ENVFILE" ]; then
-  _tpi=$(grep -E '^TRUSTED_PROXY_IPS=' "$ENVFILE" | tail -1 | cut -d= -f2- | sed -E 's/^[\x27"]//; s/[\x27"]$//; s/[[:space:]]+$//')
-  [ -n "$_tpi" ] && TRUSTED_PROXY_IPS="$_tpi"
-fi
-
 cd "$DIR/backend"
-exec "$PYTHON" -m uvicorn app.main:app --host 0.0.0.0 --port 8000 \
-  --proxy-headers --forwarded-allow-ips="$TRUSTED_PROXY_IPS"
+exec "$PYTHON" -m uvicorn app.main:app --host 0.0.0.0 --port 8000
