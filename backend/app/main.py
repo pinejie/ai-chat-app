@@ -17,6 +17,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from app import workspace_registry as wsreg
+from app import asr_service
 from app.claude_session import ClaudeSession
 from app.session_store import SessionStore
 
@@ -267,6 +268,22 @@ async def upload_files(files: list[UploadFile] = File(...)):
         file_path.write_bytes(file_bytes)
         result.append({"name": file.filename, "path": str(file_path)})
     return {"files": result}
+
+
+# ─── Routes: ASR（移动端语音输入）─────────────────────────────────────────────
+
+@app.post("/api/asr")
+async def asr_transcribe(file: UploadFile = File(...)):
+    """接收录音（webm/m4a/wav 均可），返回识别文本。鉴权已由 /api/* 中间件统一覆盖。"""
+    data = await file.read()
+    if not data:
+        raise HTTPException(400, "空文件")
+    suffix = Path(file.filename or "audio").suffix.lower() or ".bin"
+    try:
+        return await asr_service.transcribe(data, suffix)
+    except asr_service.AsrError as e:
+        # 业务失败（未配置/解码失败/连不上/超时）：422 让前端把原因原样透传给用户
+        raise HTTPException(422, str(e))
 
 # ─── Routes: Sessions ─────────────────────────────────────────────────────────
 

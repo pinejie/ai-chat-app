@@ -4,9 +4,11 @@ data/
 .env
 backend/.pid
 backend/uvicorn.log
-.venv/# 防止含敏感信息的临时备份入库
+.venv/
+# 防止含敏感信息的临时备份入库
 *.bak-*
 _verify*.sh
 .venv/
 *.log
 verify-after-restart.txt
+backend/hotwords.txt
