@@ -176,7 +176,10 @@ hr{border:none;border-top:1px solid var(--border);margin:12px 0}
   background:var(--bg);border-top:1px solid var(--border)}
 .input-box{max-width:680px;margin:0 auto;display:flex;align-items:flex-end;gap:2px;
   border:1px solid var(--border2);border-radius:18px;background:var(--bg2);padding:3px 4px 3px 8px}
-.input-box:focus-within{border-color:var(--accent2);box-shadow:var(--ring)}
+/* 触屏聚焦不需要光环描边：光标闪烁+键盘弹起已足够表达「正在编辑」，
+   彩色光晕在手机上只会像凭空多出一个框。只留一档中性边框加强。
+   PC 端焦点环保留不动——键盘 Tab 导航的无障碍刚需 */
+.input-box:focus-within{border-color:var(--text5)}
 .input{flex:1;min-width:0;border:none;outline:none;background:transparent;resize:none;
   color:var(--text);font-family:inherit;font-size:15px;line-height:1.5;
   max-height:200px;padding:10px 0}    /* 与 ui.js MAX_INPUT_H 保持一致；16px 防 iOS 聚焦自动放大（PC 是 14px） */
