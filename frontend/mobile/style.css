@@ -335,6 +335,10 @@ hr{border:none;border-top:1px solid var(--border);margin:12px 0}
 
 /* ---- 无障碍：键盘操作可见焦点；不做 hover-only 交互（R4） ---- */
 :focus-visible{outline:2px solid var(--accent2);outline-offset:2px}
+/* 文本框豁免全局焦点环：光标闪烁本身就是焦点表达，无障碍规范认可。
+   textarea 贴着容器底边，2px 描边 + 2px offset 正好画在框外沿，
+   看起来像编辑时凭空多出一个彩框——这才是「绿边框」的主凶 */
+input:focus-visible,textarea:focus-visible,select:focus-visible{outline:none}
 @media (prefers-reduced-motion:reduce){
   *,*::before,*::after{animation-duration:.001ms!important;transition-duration:.001ms!important}
 }
