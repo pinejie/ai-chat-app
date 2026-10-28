@@ -8,7 +8,7 @@
 <meta name="theme-color" content="#0a0a0f">
 <title>ZD Code</title>
 <!-- 移动端独立样式（§3.1 D1）；设计令牌取值沿用 PC，保证「同一个工具」的识别（§6） -->
-<link rel="stylesheet" href="style.css?v=1793083122">
+<link rel="stylesheet" href="style.css?v=1793154957">
 <!-- 第三方库不复制，引用 /static 下的本地打包件（§3.1 缓解措施） -->
 <link rel="stylesheet" href="/static/highlight-theme-dark.css" id="hljsTheme">
 </head>
@@ -188,6 +188,17 @@
 </aside>
 <div id="drawerMask" class="drawer-mask" aria-hidden="true"></div>
 
+<!-- 录音浮层（微信 8.0 式，A 通道按住说话时出现）：屏幕中上部气泡接住视线，
+     声波柱跟音量跳动，上滑进入取消区整体变红。pointer-events:none 不挡手指手势（voice.js） -->
+<div id="recOverlay" class="rec-overlay hidden" aria-hidden="true">
+  <div class="rec-bubble starting" id="recBubble">
+    <div class="rec-wave" id="recWave"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></div>
+    <div class="rec-cancel-mark">✕ 取消发送</div>
+    <div class="rec-text" id="recText">正在启动麦克风…</div>
+    <div class="rec-timer" id="recTimer">0s</div>
+  </div>
+</div>
+
 <div id="toast" class="toast" role="status" aria-live="polite"></div>
 
 <!-- 模型选择弹层（列表内容由阶段二第 2 步的 js/mobile.js 填充） -->
@@ -229,7 +240,7 @@
 <!-- 协议层：鉴权探测、会话、WebSocket 收发、消息渲染、文档只读浏览 -->
 <script src="js/mobile.js?v=1793083122"></script>
 <!-- 语音输入：🎤 录音 + /api/asr 识别回填，只依赖 MUI，与协议层互不干涉 -->
-<script src="js/voice.js?v=1793083122"></script>
+<script src="js/voice.js?v=1793154957"></script>
 
 </body>
 </html>

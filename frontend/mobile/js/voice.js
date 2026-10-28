@@ -25,6 +25,14 @@
   const voiceHint = document.getElementById('voiceHint');
   const holdTalk = document.getElementById('mHoldTalk');
   const input = el.input;
+  // 录音浮层（微信 8.0 式）：屏幕中上部气泡，声波跟音量动，取消区红态
+  const overlayEl = document.getElementById('recOverlay');
+  const bubbleEl = document.getElementById('recBubble');
+  const waveEl = document.getElementById('recWave');
+  const recText = document.getElementById('recText');
+  const recTimer = document.getElementById('recTimer');
+  let audioCtx = null, rafId = null, freqBuf = null;   // WebAudio 电平 → 声波柱
+  const BAR_K = [0.45, 0.7, 0.55, 0.85, 1.0, 0.85, 0.55, 0.7, 0.45];   // 中间强两边弱的造型系数
   const icMic = btnVoice ? btnVoice.querySelector('.ic-mic') : null;
   const icKbd = btnVoice ? btnVoice.querySelector('.ic-kbd') : null;
   if (!btnVoice || !voiceFile || !voiceHint || !holdTalk || !input) return;
@@ -39,6 +47,51 @@
   function channel() { return (preferB() || !hasWebRecorder()) ? 'B' : 'A'; }
 
   function setHoldLabel(t) { holdTalk.textContent = t; }
+
+  /* ---------------- 录音浮层（A 通道专属；B 通道无音频流也无按住语义，不出现） ---------------- */
+
+  function showOverlay(mode) {                    // starting | live | cancel
+    if (!overlayEl || !bubbleEl) return;
+    overlayEl.classList.remove('hidden');
+    bubbleEl.classList.toggle('starting', mode === 'starting');
+    bubbleEl.classList.toggle('cancel', mode === 'cancel');
+    if (recText) recText.textContent = mode === 'starting' ? '正在启动麦克风…'
+      : mode === 'cancel' ? '松开 取消发送' : '松开发送 · 上滑取消';
+  }
+  function hideOverlay() {
+    if (!overlayEl || !bubbleEl) return;
+    overlayEl.classList.add('hidden');
+    bubbleEl.classList.remove('starting', 'cancel');
+    stopLevelViz();
+  }
+
+  function startLevelViz(stream) {
+    try {
+      audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+      if (audioCtx.state === 'suspended') { audioCtx.resume(); }   // 个别内核创建即挂起
+      const analyser = audioCtx.createAnalyser();
+      analyser.fftSize = 512;
+      audioCtx.createMediaStreamSource(stream).connect(analyser);
+      freqBuf = new Uint8Array(analyser.frequencyBinCount);
+      const bars = waveEl ? waveEl.children : [];
+      (function loop() {
+        rafId = requestAnimationFrame(loop);
+        analyser.getByteFrequencyData(freqBuf);
+        let sum = 0;
+        for (let i = 2; i < 40; i++) sum += freqBuf[i];      // 主要取人声频段
+        const level = Math.min(1, sum / (38 * 190));
+        const t = performance.now() / 130;
+        for (let i = 0; i < bars.length; i++) {
+          const s = 0.18 + level * BAR_K[i] * (0.62 + 0.38 * Math.sin(t + i * 1.7));
+          bars[i].style.transform = 'scaleY(' + Math.max(0.12, Math.min(1, s)).toFixed(3) + ')';
+        }
+      })();
+    } catch (e) { /* 无 WebAudio：波形走 starting 的呼吸动画兜底，不影响录音 */ }
+  }
+  function stopLevelViz() {
+    if (rafId) { cancelAnimationFrame(rafId); rafId = null; }
+    if (audioCtx) { try { audioCtx.close(); } catch (e) { /* 已关闭忽略 */ } audioCtx = null; }
+  }
   function setHint(text) {
     voiceHint.textContent = text || '';
     voiceHint.classList.toggle('hidden', !text);
@@ -139,6 +192,7 @@
     setState('idle');
     setHint('');
     setHoldLabel('按住 说话');
+    hideOverlay();
     if (wasDiscard) return;                                   // 上滑取消：静默丢弃
     if (blob.size < 1000) { MUI.toast('没采集到声音，请再说一次', true); return; }
     upload(blob, 'voice.' + (mime.indexOf('mp4') > -1 ? 'm4a' : 'webm'));
@@ -164,15 +218,17 @@
       setState('recording');
       holdTalk.classList.remove('armed');            // 真正开始录了，撤掉「待启动」按压态
       setHoldLabel(hold.cancel ? '松手 取消' : '松开 发送');
-      setHint('录音 0s · 上滑可取消');               // 立刻显示，不等 1 秒的 tick
+      showOverlay(hold.cancel ? 'cancel' : 'live');   // 状态信息收进浮层，底部小字让位
+      recTimer.textContent = '0s';
+      startLevelViz(stream);
       tick = setInterval(function () {
         recSec++;
         if (recSec >= MAX_RECORD_S) { hold.discard = false; stopRecording(); MUI.toast('已到 60 秒上限，自动停止'); return; }
-        setHint('录音 ' + recSec + 's · 上滑可取消');
+        if (recTimer) recTimer.textContent = recSec + 's';
       }, 1000);
       recorder.start();
     }).catch(function (e) {
-      hold.active = false; holdTalk.classList.remove('armed'); setState('idle'); setHint(''); setHoldLabel('按住 说话');
+      hold.active = false; holdTalk.classList.remove('armed'); setState('idle'); setHint(''); setHoldLabel('按住 说话'); hideOverlay();
       const name = (e && e.name) || '';
       if (name === 'NotAllowedError' || name === 'SecurityError' || name === 'PermissionDenied') {
         try { localStorage.setItem(PREFER_B_KEY, '1'); } catch (err) { /* 无痕模式忽略 */ }
@@ -193,7 +249,7 @@
     hold.cancel = false; hold.discard = false; hold.t0 = Date.now();
     try { holdTalk.setPointerCapture(e.pointerId); } catch (_) { /* 老内核忽略 */ }
     holdTalk.classList.add('armed');               // 按下即刻有反馈：授权弹窗/设备启动可能挡几秒
-    setHint('正在启动录音…');
+    showOverlay('starting');                        // 浮层出现在视线落点，接住「按住了吗」的疑问
     startWebRecording();
   }
 
@@ -206,6 +262,7 @@
       hold.cancel = wantCancel;
       setState('recording');                    // 仅刷类
       setHoldLabel(wantCancel ? '松手 取消' : '松开 发送');
+      showOverlay(wantCancel ? 'cancel' : 'live');   // 浮层红态+大字✕，取消意图一眼可辨
     }
   }
 
@@ -213,7 +270,7 @@
     if (!hold.active || (e && e.pointerId !== hold.pid)) { return; }
     hold.active = false;
     holdTalk.classList.remove('armed');
-    if (state !== 'recording') { setHint(''); return; }   // 尚未真正开始录音：由 startWebRecording 的 !hold.active 分支兜底
+    if (state !== 'recording') { setHint(''); hideOverlay(); return; }   // 尚未真正开始录音：由 startWebRecording 的 !hold.active 分支兜底
     if (hold.cancel) { hold.discard = true; stopRecording(); return; }   // 上滑取消
     if (Date.now() - hold.t0 < MIN_HOLD_MS) { hold.discard = true; stopRecording(); MUI.toast('说话时间太短'); return; }
     hold.discard = false; stopRecording();                                // 正常：松手 → 识别
@@ -224,7 +281,7 @@
   holdTalk.addEventListener('pointerup', onHoldUp);
   holdTalk.addEventListener('pointercancel', function () {
     if (hold.active) {
-      hold.active = false; holdTalk.classList.remove('armed'); setHint('');
+      hold.active = false; holdTalk.classList.remove('armed'); setHint(''); hideOverlay();
       if (state === 'recording') { hold.discard = true; stopRecording(); }
     }
   });

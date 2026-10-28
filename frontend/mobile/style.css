@@ -415,3 +415,23 @@ hr{border:none;border-top:1px solid var(--border);margin:12px 0}
 .hw-del:active{background:var(--bg4)}
 .hw-del:disabled{opacity:.5}
 .hw-empty{padding:18px 10px;text-align:center;font-size:13px;color:var(--text5)}
+
+/* ---- 录音浮层（微信 8.0 式，voice.js）：中上部气泡接住视线，不挡任何手势 ---- */
+.rec-overlay{position:fixed;inset:0;z-index:58;display:flex;align-items:flex-start;justify-content:center;
+  padding-top:16vh;pointer-events:none}
+.rec-bubble{display:flex;flex-direction:column;align-items:center;gap:12px;min-width:200px;
+  padding:24px 32px;border-radius:22px;background:rgba(28,28,42,.92);color:#fff;
+  box-shadow:0 12px 44px rgba(0,0,0,.4);transition:background .15s}
+.rec-bubble.cancel{background:rgba(220,38,38,.95)}
+.rec-wave{display:flex;align-items:center;gap:4px;height:34px}
+.rec-wave i{width:5px;height:100%;border-radius:3px;background:#fff;opacity:.9;
+  transform:scaleY(.2);transform-origin:center}
+.rec-bubble.starting .rec-wave i{animation:rec-idle 1s ease-in-out infinite}
+.rec-bubble.starting .rec-wave i:nth-child(2n){animation-delay:.15s}
+.rec-bubble.starting .rec-wave i:nth-child(3n){animation-delay:.3s}
+@keyframes rec-idle{0%,100%{transform:scaleY(.2)}50%{transform:scaleY(.55)}}
+.rec-text{font-size:15px;font-weight:600;letter-spacing:.5px;white-space:nowrap}
+.rec-timer{font-size:12px;opacity:.72;font-variant-numeric:tabular-nums}
+.rec-cancel-mark{display:none;font-size:26px;font-weight:700;line-height:1}
+.rec-bubble.cancel .rec-wave,.rec-bubble.cancel .rec-timer{display:none}
+.rec-bubble.cancel .rec-cancel-mark{display:block}
