@@ -105,7 +105,6 @@ async function sendMessage() {
   input.value = '';
   // 手动拖拽模式下发送后保持原高度，自动模式才收回
   input.style.height = sendCtx.inputManualH != null ? sendCtx.inputManualH + 'px' : 'auto';
-  resetTrace();
   addUserMsg(text);
 
   // Reset streaming state

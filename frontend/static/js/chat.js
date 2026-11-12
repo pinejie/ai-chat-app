@@ -1,5 +1,5 @@
 // --- Per-Session Context: each session owns its COMPLETE DOM ---
-// Messages + Trace + Input area + Buttons — all per-session.
+// Messages + Input area + Buttons — all per-session.
 // Switching = show/hide. No save/restore needed.
 
 // 输入框高度：自动模式上限 + 手动拖拽模式（全局共享，存 localStorage）
@@ -19,20 +19,6 @@ const SCROLL_BOTTOM_SLACK = 80;               // 距底部小于该值视为“�
 const SESSION_HTML = `
   <div class="header"><span class="header-title">ZD Code</span></div>
   <div class="messages"><div class="messages-inner"></div></div>
-  <div class="trace-panel" style="display:none">
-    <div class="trace-header" onclick="toggleTracePanel()">
-      <span class="trace-title">链路追踪</span>
-      <span class="trace-toggle">▼</span>
-    </div>
-    <div class="trace-body">
-      <div class="trace-timeline"></div>
-    </div>
-  </div>
-  <div class="trace-bar" style="display:none" onclick="toggleTracePanel()">
-    <span class="trace-bar-dot"></span>
-    <span class="trace-bar-text">链路追踪</span>
-    <span class="trace-bar-toggle">▲</span>
-  </div>
   <div class="input-area">
     <div class="input-resize-handle" title="拖动调整输入区高度，双击恢复自动增高"></div>
     <div class="input-inner">
@@ -67,14 +53,6 @@ function newSessionCtx(sid) {
     // Messages
     messagesEl: q('.messages'),
     messagesInner: q('.messages-inner'),
-    // Trace
-    tracePanel: q('.trace-panel'),
-    traceBar: q('.trace-bar'),
-    traceTimeline: q('.trace-timeline'),
-    traceBody: q('.trace-body'),
-    traceBarDot: q('.trace-bar-dot'),
-    traceBarText: q('.trace-bar-text'),
-    traceToggle: q('.trace-toggle'),
     // Input
     inputEl: q('.chat-textarea'),
     sendBtn: q('.send-btn'),
@@ -93,8 +71,6 @@ function newSessionCtx(sid) {
     // Input state
     inputState: { history: [], index: -1, tempInput: '' },
     inputManualH: null,   // 非 null = 手动拖拽高度（px），自动增高暂停
-    // Trace state
-    tracePanelOpen: false,
     // History state：history 保留服务端全量消息，DOM 只渲染 [historyStart, end) 这一段
     history: [],
     historyStart: 0,
@@ -784,10 +760,7 @@ async function stopGeneration() {
 function handleMsg(msg, sid) {
   sid = sid || currentSessionId;
   if (msg.type === 'system' && msg.subtype === 'init') return;
-  if (msg.type === 'trace') {
-    if (sid === currentSessionId) handleTraceEvent(msg);
-    return;
-  }
+  if (msg.type === 'trace') return;   // 链路追踪已移除，旧后端/缓存的 trace 事件直接丢弃
   if (!sessionCtxs.has(sid)) return;
   const ctx = sessionCtxs.get(sid);
   const isCurrent = (sid === currentSessionId);

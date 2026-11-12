@@ -5,7 +5,6 @@ import logging
 import os
 import re
 import time
-from collections import defaultdict
 from typing import Optional, Set
 
 from fastapi import WebSocket
@@ -13,191 +12,6 @@ from fastapi import WebSocket
 from app.session_store import SessionStore
 
 logger = logging.getLogger("claude-bridge")
-
-
-class TraceBuilder:
-    """Builds a structured trace from Claude Code stream-json events."""
-
-    def __init__(self):
-        self.spans: list[dict] = []
-        self.start_time: float = 0
-        self._pending_tools: dict[str, dict] = {}  # tool_use_id -> span
-        self._llm_step = 0
-        self._tool_names: list[str] = []  # for loop detection
-
-    def begin(self):
-        self.start_time = time.time()
-
-    def process_event(self, data: dict) -> dict | None:
-        """Process a stream-json event. Returns a trace event dict if something notable happened."""
-        msg_type = data.get("type")
-        msg = data.get("message", {})
-
-        if msg_type == "assistant":
-            content = msg.get("content", [])
-            usage = msg.get("usage", {})
-            events = []
-
-            for block in content:
-                if not isinstance(block, dict):
-                    continue
-                btype = block.get("type")
-
-                if btype == "tool_use":
-                    tool_id = block.get("id", "")
-                    tool_name = block.get("name", "unknown")
-                    tool_input = block.get("input", {})
-                    span = {
-                        "type": "tool",
-                        "name": tool_name,
-                        "tool_id": tool_id,
-                        "input_summary": _summarize_input(tool_name, tool_input),
-                        "start": time.time(),
-                        "end": None,
-                        "status": "running",
-                        "error": None,
-                    }
-                    self._pending_tools[tool_id] = span
-                    self._tool_names.append(tool_name)
-                    events.append({**span, "event": "tool_start"})
-
-                elif btype == "tool_result":
-                    ev = self._finish_tool(block)
-                    if ev:
-                        events.append(ev)
-
-            if usage and usage.get("input_tokens", 0) > 0:
-                self._llm_step += 1
-                llm_span = {
-                    "type": "llm",
-                    "step": self._llm_step,
-                    "input_tokens": usage.get("input_tokens", 0),
-                    "output_tokens": usage.get("output_tokens", 0),
-                    "stop_reason": msg.get("stop_reason", "?"),
-                    "ts": time.time(),
-                }
-                self.spans.append(llm_span)
-                events.append({**llm_span, "event": "llm_call"})
-
-            return {"type": "trace", "events": events} if events else None
-
-        # 工具结果在 CLI 的 stream-json 中是 type=user 事件里的 tool_result 块（已用真实输出验证），
-        # 只看 assistant 事件会导致所有工具 span 永远无法完成
-        if msg_type == "user":
-            events = []
-            content = msg.get("content", []) if isinstance(msg.get("content"), list) else []
-            for block in content:
-                if isinstance(block, dict) and block.get("type") == "tool_result":
-                    ev = self._finish_tool(block)
-                    if ev:
-                        events.append(ev)
-            return {"type": "trace", "events": events} if events else None
-
-        if msg_type == "result":
-            return self._build_final_trace()
-
-        return None
-
-    def _finish_tool(self, block: dict) -> dict | None:
-        """Close the pending tool span matching a tool_result block."""
-        tool_id = block.get("tool_use_id", "")
-        if tool_id not in self._pending_tools:
-            return None
-        span = self._pending_tools.pop(tool_id)
-        text = _result_text(block.get("content", ""))
-        span["end"] = time.time()
-        span["status"] = "error" if block.get("is_error", False) else "success"
-        span["duration"] = round(span["end"] - span["start"], 2)
-        if span["status"] == "error":
-            span["error"] = text[:300]
-        span["output_summary"] = text[:200]
-        self.spans.append(span)
-        return {**span, "event": "tool_end"}
-
-    def detect_issues(self) -> list[str]:
-        """Detect potential problems in the trace."""
-        issues = []
-
-        # Loop detection: same tool called 3+ times in a row
-        if len(self._tool_names) >= 6:
-            recent = self._tool_names[-6:]
-            for w in range(2, len(recent) // 2 + 1):
-                pattern = recent[-w:]
-                if recent[-(w * 2):-w] == pattern:
-                    issues.append(f"循环检测: {' → '.join(pattern)} 重复执行")
-                    break
-
-        # Consecutive errors
-        recent_spans = [s for s in self.spans if s.get("type") == "tool"][-5:]
-        error_count = sum(1 for s in recent_spans if s.get("status") == "error")
-        if error_count >= 3:
-            issues.append(f"连续 {error_count} 个工具调用失败")
-
-        return issues
-
-    def _build_final_trace(self) -> dict:
-        """Build the final summary trace event."""
-        tool_spans = [s for s in self.spans if s.get("type") == "tool"]
-        llm_spans = [s for s in self.spans if s.get("type") == "llm"]
-
-        total_input = sum(s.get("input_tokens", 0) for s in llm_spans)
-        total_output = sum(s.get("output_tokens", 0) for s in llm_spans)
-        errors = [s for s in tool_spans if s.get("status") == "error"]
-
-        # Tool frequency
-        tool_freq = defaultdict(int)
-        for s in tool_spans:
-            tool_freq[s["name"]] += 1
-
-        return {
-            "type": "trace",
-            "event": "trace_complete",
-            "summary": {
-                "total_tools": len(tool_spans),
-                "total_llm_calls": len(llm_spans),
-                "total_input_tokens": total_input,
-                "total_output_tokens": total_output,
-                "errors": len(errors),
-                "tool_frequency": dict(tool_freq),
-                "issues": self.detect_issues(),
-                "duration": round(time.time() - self.start_time, 1) if self.start_time else 0,
-            },
-            "spans": [
-                {k: v for k, v in s.items() if k not in ("start",)}
-                for s in self.spans
-            ],
-        }
-
-    def get_current_trace(self) -> dict:
-        """Get current trace state (for API queries)."""
-        return {
-            "spans": self.spans,
-            "issues": self.detect_issues(),
-        }
-
-
-def _result_text(content) -> str:
-    """tool_result.content 可能是字符串，也可能是 [{type:text,text:...}] 数组。"""
-    if isinstance(content, list):
-        return "\n".join(
-            b.get("text", "") for b in content
-            if isinstance(b, dict) and b.get("type") == "text"
-        )
-    return str(content or "")
-
-
-def _summarize_input(tool_name: str, tool_input: dict) -> str:
-    """Create a short summary of tool input for display."""
-    if tool_name == "Bash":
-        cmd = tool_input.get("command", "")
-        return cmd[:120] + ("..." if len(cmd) > 120 else "")
-    elif tool_name in ("Read", "Write", "Edit"):
-        return tool_input.get("file_path", "")
-    elif tool_name == "Grep":
-        return tool_input.get("pattern", "")
-    else:
-        s = json.dumps(tool_input, ensure_ascii=False)
-        return s[:120] + ("..." if len(s) > 120 else "")
 
 
 class ClaudeSession:
@@ -257,7 +71,6 @@ class ClaudeSession:
         self.last_active: float = 0
         self._first_message = not SessionStore.is_title_manually_set(session_id)
         self._stream_lock = asyncio.Lock()
-        self.trace = TraceBuilder()
         self._debug_log_path: Optional[str] = None
         self._last_stderr: str = ""
         self._last_result_is_error: bool = False
@@ -316,9 +129,7 @@ class ClaudeSession:
             file_info += "\n请使用 Read 工具读取这些文件内容。\n---"
             text = text + file_info
 
-        # Reset trace and error flag for this round
-        self.trace = TraceBuilder()
-        self.trace.begin()
+        # Reset error flag for this round
         self._last_result_is_error = False
         self._last_error_text = ""
 
@@ -400,11 +211,6 @@ class ClaudeSession:
                     self.claude_session_id = data.get("session_id")
                     SessionStore.save_claude_session_id(self.id, self.claude_session_id)
 
-                # Build trace from stream events
-                trace_event = self.trace.process_event(data)
-                if trace_event:
-                    await self._safe_send(trace_event)
-
                 await self._safe_send(data)
                 self.touch()
                 if data.get("type") == "assistant":
@@ -421,11 +227,6 @@ class ClaudeSession:
                     if current_text:
                         SessionStore.append_message(self.id, "assistant", current_text)
                         current_text = ""
-                    # Save trace to disk
-                    SessionStore.save_trace(self.id, self.trace)
-                    # Send final trace summary
-                    final = self.trace._build_final_trace()
-                    await self._safe_send(final)
             except json.JSONDecodeError:
                 await self._safe_send({"type": "raw", "content": line.decode().strip()})
 

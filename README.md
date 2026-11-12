@@ -1,6 +1,6 @@
 # ZD Code
 
-通过 Web 界面使用 Claude Code CLI，支持访问口令登录、流式输出、多会话管理、对话持久化、文件上传、跨天记忆、上下文自动恢复、执行追踪、模型与权限模式切换、项目文档管理、Office 文档预览和主题切换。
+通过 Web 界面使用 Claude Code CLI，支持访问口令登录、流式输出、多会话管理、对话持久化、文件上传、跨天记忆、上下文自动恢复、模型与权限模式切换、项目文档管理、Office 文档预览和主题切换。
 
 ## 功能
 
@@ -11,7 +11,6 @@
 - **会话隔离** — 输入历史、输入框内容、流式状态按会话独立存储，切换对话互不干扰
 - **对话持久化** — 聊天记录以 JSONL 文件存储，服务重启不丢失
 - **跨天记忆** — 优先 `--resume` 恢复短期记忆，session 丢失时自动从本地历史分批压缩恢复上下文
-- **执行追踪（Trace）** — 实时展示每轮工具调用、LLM 调用、token 消耗，自动检测循环调用和连续错误，完成后可查看完整 span 时间线
 - **模型选择** — 每个对话可单独选择模型（默认 / sonnet / opus / haiku / fable，也可通过 `CLAUDE_MODEL_OPTIONS` 追加完整模型名）
 - **标题保护** — 用户手动改名后系统不再自动覆盖，向后兼容旧数据
 - **文件上传** — 支持图片、PDF、文本、代码文件上传，文件路径自动注入 Claude 上下文
@@ -33,8 +32,8 @@ ai-chat-app/
 ├── backend/
 │   ├── app/
 │   │   ├── main.py            # FastAPI 路由 + 口令鉴权 + 应用初始化
-│   │   ├── session_store.py   # 会话存储、索引管理、Trace 持久化
-│   │   └── claude_session.py  # Claude 会话管理 + 历史恢复 + TraceBuilder
+│   │   ├── session_store.py   # 会话存储、索引管理
+│   │   └── claude_session.py  # Claude 会话管理 + 历史恢复
 │   ├── .env.example           # 环境变量示例
 │   ├── .env                   # 本地配置（不入 Git）
 │   └── requirements.txt       # Python 依赖
@@ -51,7 +50,6 @@ ai-chat-app/
 │           ├── upload.js      # 文件上传 + 发送消息
 │           ├── mode.js        # 权限模式 + 模型选择
 │           ├── project.js     # 项目文档管理 + Office 预览
-│           ├── trace.js       # 执行追踪面板
 │           ├── highlight.min.js  # highlight.js 本地打包
 │           └── purify.min.js     # DOMPurify 本地打包
 ├── data/                      # 运行时生成（不入 Git）
@@ -61,13 +59,12 @@ ai-chat-app/
 │   ├── uploads/               # 上传文件存储
 │   ├── preview_cache/         # Office → PDF 转换缓存
 │   ├── slide_cache/           # 幻灯片 PNG 渲染缓存
-│   ├── debug-logs/            # Claude CLI debug 日志
-│   └── traces/                # 执行追踪数据（JSON）
+│   └── debug-logs/            # Claude CLI debug 日志
 ├── ai-chat-app.sh             # 启停脚本
 └── .venv/                     # 本地虚拟环境（不入 Git）
 ```
 
-后端桥接 Claude Code CLI，通过子进程调用 `claude -p --output-format stream-json`，将流式输出通过 WebSocket 推送给前端。`TraceBuilder` 从 stream-json 事件中提取工具调用、LLM 调用、token 用量，构建结构化追踪数据。前端为纯静态文件，由后端托管。
+后端桥接 Claude Code CLI，通过子进程调用 `claude -p --output-format stream-json`，将流式输出通过 WebSocket 推送给前端。前端为纯静态文件，由后端托管。
 
 项目文档功能读写的是 `WORKSPACE_DIR/project/` 目录，所有路径都会校验，禁止越出该目录。
 
@@ -184,7 +181,6 @@ cp backend/.env.example backend/.env
 | `PUT` | `/api/sessions/{id}/title` | 重命名对话 |
 | `POST` | `/api/sessions/{id}/mode` | 设置权限模式，请求体 `{"mode": "..."}` |
 | `POST` | `/api/sessions/{id}/model` | 设置模型，请求体 `{"model": "..."}` |
-| `GET` | `/api/sessions/{id}/trace` | 获取执行追踪数据（活跃会话返回实时数据） |
 | `GET` | `/api/sessions/{id}/generating` | 查询是否正在生成（刷新后恢复按钮状态） |
 
 ### 文件上传

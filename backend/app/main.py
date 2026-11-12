@@ -138,7 +138,12 @@ def auth_logout(response: Response):
 
 @app.get("/")
 async def index():
-    return FileResponse(STATIC_DIR / "index.html")
+    # 首页必须每次回源校验：它承载的是带 ?v= 的资源清单，被浏览器缓存住就拿不到新版本。
+    # 静态资源靠 ?v= 做缓存失效，首页本身不能缓存。
+    return FileResponse(
+        STATIC_DIR / "index.html",
+        headers={"Cache-Control": "no-cache, must-revalidate"},
+    )
 
 
 @app.get("/api/health")
@@ -458,20 +463,6 @@ async def stop_session(session_id: str):
     await session.stop()
     await session.broadcast({"type": "stopped"})   # 所有观看该会话的页面都要看到「已中断」
     return {"ok": True}
-
-
-@app.get("/api/sessions/{session_id}/trace")
-def get_session_trace(session_id: str):
-    """Get trace data for a session (persisted from last run, or live if active)."""
-    # If session is active, return live trace
-    if session_id in sessions:
-        live = sessions[session_id].trace.get_current_trace()
-        return {"live": True, **live}
-    # Otherwise load from disk
-    trace = SessionStore.load_trace(session_id)
-    if trace:
-        return {"live": False, **trace}
-    return {"live": False, "spans": [], "issues": []}
 
 
 @app.get("/api/models")
