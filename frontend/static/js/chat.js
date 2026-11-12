@@ -7,13 +7,21 @@ const INPUT_MAX_H = 280;                      // 与 style.css .input-box textar
 const INPUT_MANUAL_MIN_H = 80;                // 手动拖拽的下限（一行 + 工具栏）
 const INPUT_MANUAL_KEY = 'zd_input_manual_h'; // 拖拽结果（px）；无该键 = 自动增高模式
 
+// 长对话渲染参数
+// HISTORY_PAGE_SIZE：首屏/每次向上加载的消息条数。历史数组完整留在内存，DOM 只保留已加载窗口。
+// STREAM_RENDER_INTERVAL_MS：流式渲染节流间隔。CLI 每个内容块一个 assistant 事件，不节流会每次全量重解析。
+// STREAM_TAIL_MAX：流式气泡尾部保留的最大未定稿字符数；此前的内容按空行切段增量追加，避免 O(n²)。
+const HISTORY_PAGE_SIZE = 40;
+const STREAM_RENDER_INTERVAL_MS = 80;
+const STREAM_TAIL_MAX = 4096;
+const SCROLL_BOTTOM_SLACK = 80;               // 距底部小于该值视为“用户还在看最新内容”
+
 const SESSION_HTML = `
   <div class="header"><span class="header-title">ZD Code</span></div>
   <div class="messages"><div class="messages-inner"></div></div>
   <div class="trace-panel" style="display:none">
     <div class="trace-header" onclick="toggleTracePanel()">
       <span class="trace-title">链路追踪</span>
-      <span class="trace-stats"></span>
       <span class="trace-toggle">▼</span>
     </div>
     <div class="trace-body">
@@ -64,7 +72,6 @@ function newSessionCtx(sid) {
     traceBar: q('.trace-bar'),
     traceTimeline: q('.trace-timeline'),
     traceBody: q('.trace-body'),
-    traceStats: q('.trace-stats'),
     traceBarDot: q('.trace-bar-dot'),
     traceBarText: q('.trace-bar-text'),
     traceToggle: q('.trace-toggle'),
@@ -87,10 +94,15 @@ function newSessionCtx(sid) {
     inputState: { history: [], index: -1, tempInput: '' },
     inputManualH: null,   // 非 null = 手动拖拽高度（px），自动增高暂停
     // Trace state
-    traceEvents: [],
     tracePanelOpen: false,
-    // History loaded flag
+    // History state：history 保留服务端全量消息，DOM 只渲染 [historyStart, end) 这一段
+    history: [],
+    historyStart: 0,
     historyLoaded: false,
+    loadEarlierEl: null,
+    // Scroll 状态：用户主动上翻后不再被流式更新拽回底部
+    atBottom: true,
+    scrollForce: false,
     // Pending scroll-to-bottom frame id
     scrollRaf: 0,
   };
@@ -256,12 +268,21 @@ function _attachSessionListeners(ctx) {
     selectedFiles = selectedFiles.concat(files);
     renderFilePreview();
   });
+  // 滚动位置决定流式更新是否继续跟随底部；接近顶部时按页加载更早历史
+  ctx.messagesEl.addEventListener('scroll', function() {
+    const el = ctx.messagesEl;
+    ctx.atBottom = (el.scrollHeight - el.scrollTop - el.clientHeight) < SCROLL_BOTTOM_SLACK;
+    if (ctx === currentCtx && el.scrollTop < 120 && el.scrollHeight > el.clientHeight + 40) {
+      scheduleLoadEarlier(ctx);
+    }
+  }, { passive: true });
 }
 
 let sessionCtxs = new Map();
 let currentCtx = null;
 
 function switchCtx(targetSid) {
+  cancelStreamRender();
   // Save globals back to current ctx
   if (currentCtx) {
     currentCtx.isGenerating = isGenerating;
@@ -553,12 +574,8 @@ async function switchChat(sessionId) {
     try {
       const res = await fetch(API + '/api/sessions/' + sessionId + '/history');
       const history = await res.json();
-      currentCtx.messagesInner.innerHTML = '';
-      currentCtx.assistantEl = null;
-      for (const msg of history) {
-        if (msg.role === 'user') addUserMsg(msg.content);
-        else if (msg.role === 'assistant') addAssistantMsg(msg.content);
-      }
+      currentCtx.history = Array.isArray(history) ? history : [];
+      renderHistoryWindow(currentCtx, true);
       currentCtx.historyLoaded = true;
     } catch (err) {
       addSystemMsg('加载历史失败: ' + err.message);
@@ -590,7 +607,7 @@ async function switchChat(sessionId) {
     currentCtx.finalAssistantHtml = '';
   }
 
-  scrollBottom();
+  scrollBottom(true);
 
   // Re-assert button state
   showStopBtn(currentCtx.isGenerating);
@@ -611,7 +628,6 @@ async function switchChat(sessionId) {
           currentCtx.streamingText = ''; currentCtx.streamingThinking = '';
           currentCtx.assistantEl = null;
           currentAssistantEl = null;
-          if (currentCtx.traceStats) updateTraceStats();
         }
         showStopBtn(data.generating);
       }
@@ -672,7 +688,6 @@ function connectWS() {
                 if (sid === currentSessionId) {
                   isGenerating = false;
                   currentAssistantEl = null;
-                  updateTraceStats();
                   showStopBtn(false);
                 }
               }
@@ -707,6 +722,7 @@ function reconnect() {
 // --- Streaming ---
 
 function resetStreaming() {
+  cancelStreamRender();
   streamingText = ''; streamingThinking = ''; currentAssistantEl = null; isGenerating = false;
   if (currentCtx) {
     currentCtx.streamingText = '';
@@ -745,6 +761,7 @@ function notifyBlockedSend() {
 
 async function stopGeneration() {
   if (!currentSessionId) return;
+  cancelStreamRender();
   isGenerating = false;
   if (currentCtx) currentCtx.isGenerating = false;
   if (currentAssistantEl) {
@@ -878,18 +895,149 @@ function ensureAssistantBubble() {
   }
 }
 
-function updateStreamingBubble() {
+// 流式渲染节流：assistant 事件按内容块到达，不节流的话每次都要把累计全文重新 parse + sanitize。
+let streamRenderTimer = 0;
+
+function cancelStreamRender() {
+  if (streamRenderTimer) {
+    clearTimeout(streamRenderTimer);
+    streamRenderTimer = 0;
+  }
+}
+
+function _typingHtml() {
+  return '<span class="typing">思考中<span class="dot">.</span><span class="dot">.</span><span class="dot">.</span></span>';
+}
+
+function _buildThinkingEl() {
+  const details = document.createElement('details');
+  details.open = true;
+  const summary = document.createElement('summary');
+  summary.className = 'thinking-summary';
+  summary.textContent = '思考中...';
+  const content = document.createElement('div');
+  content.className = 'thinking-content streaming';
+  details.appendChild(summary);
+  details.appendChild(content);
+  return details;
+}
+
+// 气泡结构：思考区（纯文本流式）+ 稳定区（已定稿 markdown，只追加）+ 尾部区（小段重渲染）
+function _resetStreamStructure(bubble) {
+  bubble.innerHTML = '';
+  const st = { thinkEl: null, stableEl: null, tailEl: null, renderedLen: 0, thinkText: '', tailText: '' };
+  if (streamingThinking) {
+    st.thinkEl = _buildThinkingEl();
+    st.thinkEl.querySelector('.thinking-content').textContent = streamingThinking;
+    st.thinkText = streamingThinking;
+    bubble.appendChild(st.thinkEl);
+  }
+  st.stableEl = document.createElement('div');
+  st.stableEl.className = 'stream-stable';
+  st.tailEl = document.createElement('div');
+  st.tailEl.className = 'stream-tail';
+  bubble.appendChild(st.stableEl);
+  bubble.appendChild(st.tailEl);
+  return st;
+}
+
+// 在 [from, text.length - STREAM_TAIL_MAX) 内找最后一个“空行且不在代码围栏里”的切点。
+// from 一定是上一次的切点（空行后），所以从这里开始扫描时围栏必为关闭状态。
+function _findStableSplit(text, from) {
+  const target = text.length - STREAM_TAIL_MAX;
+  if (target <= from) return from;
+  let i = from;
+  let fence = false;
+  let fenceChar = '';
+  let fenceLen = 0;
+  let lastSafe = from;
+  while (i < target) {
+    const nl = text.indexOf('\n', i);
+    const lineEnd = nl === -1 ? text.length : nl;
+    const line = text.slice(i, lineEnd);
+    const fm = line.match(/^\s*(`{3,}|~{3,})(.*)$/);
+    if (fm) {
+      const mark = fm[1];
+      if (!fence) {
+        fence = true;
+        fenceChar = mark.charAt(0);
+        fenceLen = mark.length;
+      } else if (mark.charAt(0) === fenceChar && mark.length >= fenceLen && fm[2].trim() === '') {
+        fence = false;
+      }
+    } else if (!fence && line.trim() === '') {
+      lastSafe = Math.min(lineEnd + 1, text.length);
+    }
+    if (nl === -1) break;
+    i = nl + 1;
+  }
+  return lastSafe;
+}
+
+function renderStreamingBubbleIncremental() {
   if (!currentCtx) return;
   ensureAssistantBubble();
-  let html = '';
-  if (streamingThinking) html += '<details open><summary class="thinking-summary">思考中...</summary><div class="thinking-content">' + safeMd(streamingThinking) + '</div></details>';
-  if (streamingText) html += safeMd(streamingText);
-  if (!streamingText && !streamingThinking) html = '<span class="typing">思考中<span class="dot">.</span><span class="dot">.</span><span class="dot">.</span></span>';
-  currentAssistantEl.querySelector('.bubble').innerHTML = html;
+  if (!currentAssistantEl) return;
+  const bubble = currentAssistantEl.querySelector('.bubble');
+  if (!bubble) return;
+
+  if (!streamingText && !streamingThinking) {
+    bubble.innerHTML = _typingHtml();
+    currentAssistantEl._stream = null;
+    scrollBottom();
+    return;
+  }
+
+  let st = currentAssistantEl._stream;
+  if (!st || !st.stableEl || !bubble.contains(st.stableEl) || st.renderedLen > streamingText.length) {
+    st = _resetStreamStructure(bubble);
+    currentAssistantEl._stream = st;
+  }
+
+  // 思考内容流式期间按纯文本显示，避免长思考被反复全量 markdown 解析；finalize 时再统一渲染。
+  if (streamingThinking) {
+    if (!st.thinkEl) {
+      st = _resetStreamStructure(bubble);
+      currentAssistantEl._stream = st;
+    }
+    if (st.thinkText !== streamingThinking) {
+      st.thinkEl.querySelector('.thinking-content').textContent = streamingThinking;
+      st.thinkText = streamingThinking;
+    }
+  } else if (st.thinkEl) {
+    st.thinkEl.remove();
+    st.thinkEl = null;
+    st.thinkText = '';
+  }
+
+  const split = _findStableSplit(streamingText, st.renderedLen);
+  if (split > st.renderedLen) {
+    st.stableEl.insertAdjacentHTML('beforeend', safeMd(streamingText.slice(st.renderedLen, split)));
+    st.renderedLen = split;
+  }
+
+  const tail = streamingText.slice(st.renderedLen);
+  if (st.tailText !== tail) {
+    st.tailEl.innerHTML = tail ? safeMd(tail) : '';
+    st.tailText = tail;
+  }
   scrollBottom();
 }
 
+// 兼容原调用点：事件到达只调度，80ms 内多次事件合并成一次渲染。
+function updateStreamingBubble() {
+  if (!currentCtx) return;
+  if (streamRenderTimer) return;
+  const ctx = currentCtx;
+  streamRenderTimer = setTimeout(function () {
+    streamRenderTimer = 0;
+    if (currentCtx !== ctx) return;
+    renderStreamingBubbleIncremental();
+  }, STREAM_RENDER_INTERVAL_MS);
+}
+
 function finalizeStreaming(save) {
+  cancelStreamRender();
   const hasContent = streamingText || streamingThinking;
   if (save && currentCtx && hasContent) {
     let html = '';
@@ -906,8 +1054,109 @@ function finalizeStreaming(save) {
   if (streamingThinking) html += '<details open><summary class="thinking-summary">思考过程</summary><div class="thinking-content">' + safeMd(streamingThinking) + '</div></details>';
   html += safeMd(streamingText);
   currentAssistantEl.querySelector('.bubble').innerHTML = html;
+  currentAssistantEl._stream = null;
   currentAssistantEl = null; streamingText = ''; streamingThinking = '';
   if (currentCtx) currentCtx.assistantEl = null;
+}
+
+// --- History window ---
+// 服务端仍是全量 history；这里只控制 DOM 渲染窗口：先渲染最近 HISTORY_PAGE_SIZE 条，
+// 向上滚动或点按钮再按页插入更早消息。这样打开/切回长对话的成本与总消息数解耦。
+
+let loadEarlierRaf = 0;
+
+function buildHistoryMsgEl(msg) {
+  if (!msg) return null;
+  const text = msg.content == null ? '' : String(msg.content);
+  const el = document.createElement('div');
+  if (msg.role === 'user') {
+    el.className = 'msg msg-user';
+    el.innerHTML = '<div class="bubble">' + escapeHtml(text) + '</div>';
+  } else if (msg.role === 'assistant') {
+    el.className = 'msg msg-assistant';
+    el.innerHTML = '<div class="bubble">' + safeMd(text) + '</div>';
+  } else {
+    return null;
+  }
+  return el;
+}
+
+function renderHistoryWindow(ctx, reset) {
+  if (!ctx) return;
+  const history = ctx.history || [];
+  if (reset) {
+    ctx.messagesInner.innerHTML = '';
+    ctx.loadEarlierEl = null;
+    ctx.assistantEl = null;
+    ctx.historyStart = Math.max(0, history.length - HISTORY_PAGE_SIZE);
+    const frag = document.createDocumentFragment();
+    for (let i = ctx.historyStart; i < history.length; i++) {
+      const el = buildHistoryMsgEl(history[i]);
+      if (el) frag.appendChild(el);
+    }
+    ctx.messagesInner.appendChild(frag);
+    syncLoadEarlier(ctx);
+    scrollBottom(true);
+    return;
+  }
+
+  if (ctx.historyStart <= 0) return;
+  if (ctx.scrollRaf) { cancelAnimationFrame(ctx.scrollRaf); ctx.scrollRaf = 0; }
+  ctx.scrollForce = false;
+
+  const prevStart = Math.max(0, ctx.historyStart - HISTORY_PAGE_SIZE);
+  const prevTop = ctx.messagesEl.scrollTop;
+  const prevHeight = ctx.messagesEl.scrollHeight;
+  const frag = document.createDocumentFragment();
+  for (let i = prevStart; i < ctx.historyStart; i++) {
+    const el = buildHistoryMsgEl(history[i]);
+    if (el) frag.appendChild(el);
+  }
+  // 按钮始终留在最顶部：插在按钮之后的第一个消息之前
+  const anchor = ctx.loadEarlierEl ? ctx.loadEarlierEl.nextElementSibling : ctx.messagesInner.firstElementChild;
+  if (anchor) ctx.messagesInner.insertBefore(frag, anchor);
+  else ctx.messagesInner.appendChild(frag);
+  ctx.historyStart = prevStart;
+  syncLoadEarlier(ctx);
+  // 补偿插入高度，保持用户当前视口不动
+  ctx.messagesEl.scrollTop = ctx.messagesEl.scrollHeight - prevHeight + prevTop;
+  ctx.atBottom = false;
+}
+
+function syncLoadEarlier(ctx) {
+  const remain = ctx.historyStart || 0;
+  if (remain <= 0) {
+    if (ctx.loadEarlierEl) {
+      ctx.loadEarlierEl.remove();
+      ctx.loadEarlierEl = null;
+    }
+    return;
+  }
+  if (!ctx.loadEarlierEl) {
+    const wrap = document.createElement('div');
+    wrap.className = 'load-earlier';
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.addEventListener('click', function () { loadEarlierMessages(ctx); });
+    wrap.appendChild(btn);
+    ctx.messagesInner.insertBefore(wrap, ctx.messagesInner.firstChild);
+    ctx.loadEarlierEl = wrap;
+  }
+  const btn = ctx.loadEarlierEl.querySelector('button');
+  btn.textContent = '加载更早的消息（还有 ' + remain + ' 条）';
+}
+
+function loadEarlierMessages(ctx) {
+  if (!ctx || ctx.historyStart <= 0) return;
+  renderHistoryWindow(ctx, false);
+}
+
+function scheduleLoadEarlier(ctx) {
+  if (loadEarlierRaf) return;
+  loadEarlierRaf = requestAnimationFrame(function () {
+    loadEarlierRaf = 0;
+    if (currentCtx === ctx) loadEarlierMessages(ctx);
+  });
 }
 
 // --- Message DOM helpers (all scoped to currentCtx) ---
@@ -916,7 +1165,7 @@ function addUserMsg(text) {
   if (!currentCtx) return;
   const el = document.createElement('div'); el.className = 'msg msg-user';
   el.innerHTML = '<div class="bubble">' + escapeHtml(text) + '</div>';
-  currentCtx.messagesInner.appendChild(el); scrollBottom();
+  currentCtx.messagesInner.appendChild(el); scrollBottom(true);
 }
 function addAssistantMsg(text) {
   if (!currentCtx) return;

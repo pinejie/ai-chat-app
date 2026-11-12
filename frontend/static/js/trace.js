@@ -29,7 +29,6 @@ function handleTraceEvent(msg) {
   }
 
   for (const ev of events) {
-    currentCtx.traceEvents.push(ev);
     if (ev.event === 'tool_start') {
       addTraceItem(ev, 'running');
     } else if (ev.event === 'tool_end') {
@@ -38,7 +37,6 @@ function handleTraceEvent(msg) {
       addTraceLLMItem(ev);
     }
   }
-  updateTraceStats();
 }
 
 function addTraceItem(ev, status) {
@@ -97,45 +95,13 @@ function addTraceLLMItem(ev) {
   currentCtx.traceTimeline.appendChild(item);
 }
 
-function updateTraceStats() {
-  if (!currentCtx) return;
-  const tools = currentCtx.traceEvents.filter(e => e.event === 'tool_end');
-  const errors = tools.filter(e => e.status === 'error');
-  const running = currentCtx.traceEvents.filter(e => e.event === 'tool_start' && !tools.find(t => t.tool_id === e.tool_id));
-
-  let parts = [];
-  if (tools.length) parts.push(`工具: ${tools.length}`);
-  if (errors.length) parts.push(`错误: ${errors.length}`);
-  if (running.length) parts.push(`执行中: ${running.length}`);
-  currentCtx.traceStats.textContent = parts.join(' | ');
-
-  if (running.length > 0 || currentCtx.isGenerating) {
-    currentCtx.traceBarDot.className = 'trace-bar-dot dot-running';
-    currentCtx.traceBarText.textContent = '链路追踪 · 执行中';
-  } else if (errors.length > 0) {
-    currentCtx.traceBarDot.className = 'trace-bar-dot dot-error';
-    currentCtx.traceBarText.textContent = '链路追踪 · 有错误';
-  } else {
-    currentCtx.traceBarDot.className = 'trace-bar-dot dot-done';
-    currentCtx.traceBarText.textContent = '链路追踪 · 完成';
-  }
-}
-
 function renderTraceComplete(summary, spans) {
   if (!currentCtx) return;
-  let statParts = [
-    `LLM: ${summary.total_llm_calls}次`,
-    `工具: ${summary.total_tools}次`,
-    `Token: ${summary.total_input_tokens}→${summary.total_output_tokens}`,
-  ];
-  if (summary.errors > 0) statParts.push(`错误: ${summary.errors}`);
-  statParts.push(`耗时: ${summary.duration}s`);
-  currentCtx.traceStats.textContent = statParts.join(' | ');
-
-  currentCtx.traceBarDot.className = 'trace-bar-dot ' + (summary.errors > 0 ? 'dot-error' : 'dot-done');
+  const hasErrors = !!(summary && summary.errors > 0);
+  currentCtx.traceBarDot.className = 'trace-bar-dot ' + (hasErrors ? 'dot-error' : 'dot-done');
   currentCtx.traceBarText.textContent = '链路追踪 · 完成';
 
-  if (summary.issues && summary.issues.length > 0) {
+  if (summary && summary.issues && summary.issues.length > 0) {
     for (const issue of summary.issues) {
       const item = document.createElement('div');
       item.className = 'trace-item trace-issue';
@@ -162,9 +128,7 @@ function renderTraceComplete(summary, spans) {
 
 function resetTrace() {
   if (!currentCtx) return;
-  currentCtx.traceEvents = [];
   currentCtx.traceTimeline.innerHTML = '';
-  currentCtx.traceStats.textContent = '';
   currentCtx.traceBarDot.className = 'trace-bar-dot';
   currentCtx.traceBarText.textContent = '链路追踪';
 }

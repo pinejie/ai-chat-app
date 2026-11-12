@@ -23,10 +23,6 @@ function setTheme(theme) {
 
 })();
 
-marked.setOptions({
-  highlight: function(code, lang) {
-    if (lang && hljs.getLanguage(lang)) return hljs.highlight(code, { language: lang }).value;
-    return hljs.highlightAuto(code).value;
-  },
-  breaks: true
-});
+// marked v5+ 已移除 highlight 选项（PC 端 CDN 加载的是 v18），代码高亮需走 marked-highlight 扩展。
+// 这里不再传无效配置；聊天气泡的代码块高亮是独立问题，见后续处理。
+marked.setOptions({ breaks: true });

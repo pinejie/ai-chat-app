@@ -236,16 +236,21 @@ function wsMgrSave() {
 }
 
 // scrollBottom — scoped to currentCtx
-// Called whenever new content is added to the message list: jump to the newest content.
-// Coalesced per animation frame so frequent streaming updates stay smooth.
-function scrollBottom() {
+// 默认只在用户本来就停留在底部时跟随新内容；force=true 用于发送消息/切换会话等主动跳转。
+// 每帧合并一次，避免流式更新时频繁强制布局。
+function scrollBottom(force) {
   const ctx = currentCtx;
   if (!ctx || !ctx.messagesEl) return;
+  if (force) ctx.scrollForce = true;
   if (ctx.scrollRaf) return;
+  if (!ctx.scrollForce && !ctx.atBottom) return;
   ctx.scrollRaf = requestAnimationFrame(function() {
     ctx.scrollRaf = 0;
+    if (!ctx.scrollForce && !ctx.atBottom) return;
+    ctx.scrollForce = false;
     const el = ctx.messagesEl;
     el.scrollTop = el.scrollHeight;
+    ctx.atBottom = true;
   });
 }
 
