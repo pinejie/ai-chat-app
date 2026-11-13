@@ -653,10 +653,8 @@ function connectWS() {
                   currentAssistantEl = ctx.assistantEl;
                   finalizeStreaming(true);
                 } else if (ctx.assistantEl && (ctx.streamingText || ctx.streamingThinking)) {
-                  var html = '';
-                  if (ctx.streamingThinking) html += '<details open><summary class="thinking-summary">思考过程</summary><div class="thinking-content">' + safeMd(ctx.streamingThinking) + '</div></details>';
-                  if (ctx.streamingText) html += safeMd(ctx.streamingText);
-                  ctx.assistantEl.querySelector('.bubble').innerHTML = html;
+                  ctx.assistantEl.querySelector('.bubble').innerHTML =
+                    buildFinalHtml(ctx.streamingThinking, ctx.streamingText);
                 }
                 ctx.isGenerating = false;
                 ctx.streamingText = ''; ctx.streamingThinking = '';
@@ -809,9 +807,7 @@ function handleMsg(msg, sid) {
     if (isCurrent) { finalizeStreaming(true); showStopBtn(false); }
     else {
       if (ctx.streamingText || ctx.streamingThinking) {
-        let html = '';
-        if (ctx.streamingThinking) html += '<details open><summary class="thinking-summary">思考过程</summary><div class="thinking-content">' + safeMd(ctx.streamingThinking) + '</div></details>';
-        html += safeMd(ctx.streamingText);
+        const html = buildFinalHtml(ctx.streamingThinking, ctx.streamingText);
         // If streaming bubble exists in DOM, update it with final content
         if (ctx.assistantEl) {
           ctx.assistantEl.querySelector('.bubble').innerHTML = html;
@@ -1009,24 +1005,31 @@ function updateStreamingBubble() {
   }, STREAM_RENDER_INTERVAL_MS);
 }
 
+// 定稿气泡的唯一 HTML 出口：调用点有 4 处，拼装逻辑集中在这里才不会各写一份走样。
+// 思考区在定稿后默认折叠（不带 open）：一轮结束、可以继续对话时，历史思考过程让位给正文，
+// 需要回溯时点标题展开。流式期间由 _buildThinkingEl 单独出展开态，不走这里。
+function buildFinalHtml(thinking, text) {
+  let html = '';
+  if (thinking) {
+    html += '<details><summary class="thinking-summary">思考过程</summary>'
+         + '<div class="thinking-content">' + safeMd(thinking) + '</div></details>';
+  }
+  html += safeMd(text || '');
+  return html;
+}
+
 function finalizeStreaming(save) {
   cancelStreamRender();
   const hasContent = streamingText || streamingThinking;
   if (save && currentCtx && hasContent) {
-    let html = '';
-    if (streamingThinking) html += '<details open><summary class="thinking-summary">思考过程</summary><div class="thinking-content">' + safeMd(streamingThinking) + '</div></details>';
-    html += safeMd(streamingText);
-    currentCtx.finalAssistantHtml = html;
+    currentCtx.finalAssistantHtml = buildFinalHtml(streamingThinking, streamingText);
   }
   if (!currentAssistantEl || !hasContent) {
     currentAssistantEl = null; streamingText = ''; streamingThinking = '';
     if (currentCtx) currentCtx.assistantEl = null;
     return;
   }
-  let html = '';
-  if (streamingThinking) html += '<details open><summary class="thinking-summary">思考过程</summary><div class="thinking-content">' + safeMd(streamingThinking) + '</div></details>';
-  html += safeMd(streamingText);
-  currentAssistantEl.querySelector('.bubble').innerHTML = html;
+  currentAssistantEl.querySelector('.bubble').innerHTML = buildFinalHtml(streamingThinking, streamingText);
   currentAssistantEl._stream = null;
   currentAssistantEl = null; streamingText = ''; streamingThinking = '';
   if (currentCtx) currentCtx.assistantEl = null;
