@@ -333,6 +333,20 @@ body.input-resizing{cursor:row-resize;user-select:none}
 .proj-btn.danger{background:var(--bg3);color:var(--danger)}
 .proj-btn.danger:hover{background:var(--danger);color:#fff}
 
+/* 「只看文档 / 刷新」过滤条 */
+.project-filter{padding:0 8px 6px;display:flex;gap:6px}
+.pf-chip{padding:4px 10px;font-size:11px;border:1px solid var(--border);background:transparent;color:var(--text3);cursor:pointer;border-radius:999px;transition:all .15s;font-family:inherit}
+.pf-chip:hover{color:var(--text);border-color:var(--accent)}
+.pf-chip.active{background:var(--accent);border-color:var(--accent);color:#fff}
+
+/* 常用目录快捷入口 */
+.project-links{padding:2px 8px 8px;display:flex;flex-wrap:wrap;gap:5px}
+.pf-link{max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;padding:3px 9px;font-size:11px;border:none;background:var(--bg3);color:var(--text2);cursor:pointer;border-radius:6px;font-family:inherit}
+.pf-link:hover{background:var(--accent);color:#fff}
+
+/* 面板顶部提示当前根目录，避免把工作目录根误当成 project/ */
+.project-root-label{padding:0 12px 6px;font-size:10px;color:var(--text4);font-family:ui-monospace,SFMono-Regular,Consolas,monospace;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+
 /* 确认弹窗 */
 /* box 已有 22px 内衬，这里不再横向缩进，否则消息比标题/按钮窄一截 */
 .modal-message{padding:0;color:var(--text2);font-size:13px;line-height:1.5}
@@ -377,3 +391,9 @@ body.input-resizing{cursor:row-resize;user-select:none}
 @media (prefers-reduced-motion:reduce){
   *,*::before,*::after{animation-duration:.001ms!important;animation-iteration-count:1!important;transition-duration:.001ms!important}
 }
+
+/* 只读标记：面板根放开到整个工作目录后，标出哪些位置不能写 */
+.ro-tag{margin-left:6px;padding:0 5px;font-size:9px;line-height:14px;border-radius:4px;background:var(--bg3);color:var(--text4);border:1px solid var(--border);vertical-align:middle}
+.proj-btn:disabled{opacity:.45;cursor:not-allowed}
+.proj-btn:disabled:hover{background:var(--bg3);color:var(--text2)}
+.proj-btn.danger:disabled:hover{background:var(--bg3);color:var(--danger)}

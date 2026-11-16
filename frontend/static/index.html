@@ -9,7 +9,7 @@
 <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
 <script src="/static/js/highlight.min.js"></script>
 <script src="/static/js/purify.min.js?v=1792643367"></script>
-<link rel="stylesheet" href="/static/style.css?v=1794468933">
+<link rel="stylesheet" href="/static/style.css?v=1794816178">
 </head>
 <body>
 <div class="sidebar">
@@ -22,10 +22,16 @@
   </div>
   <div class="chat-list" id="chatList"></div>
   <div class="project-toolbar" style="display:none">
-    <button class="proj-btn" onclick="projectNewDoc()">+ 新建文档</button>
-    <button class="proj-btn" onclick="projectNewFolder()">+ 新建文件夹</button>
-    <button class="proj-btn danger" onclick="projectDelete()">删除文件夹</button>
+    <button class="proj-btn" id="projectNewDocBtn" onclick="projectNewDoc()">+ 新建文档</button>
+    <button class="proj-btn" id="projectNewFolderBtn" onclick="projectNewFolder()">+ 新建文件夹</button>
+    <button class="proj-btn danger" id="projectDeleteBtn" onclick="projectDelete()">删除文件夹</button>
   </div>
+  <div class="project-filter" style="display:none" id="projectFilter">
+    <button class="pf-chip" id="docsOnlyBtn" onclick="toggleDocsOnly()" title="只显示 md/docx/pdf/xlsx/pptx 及含文档的目录">只看文档</button>
+    <button class="pf-chip" onclick="loadProjects()" title="重新读取目录">刷新</button>
+  </div>
+  <div class="project-links" style="display:none" id="projectLinks"></div>
+  <div class="project-root-label" style="display:none" id="projectRootLabel"></div>
   <div class="project-list" id="projectList"></div>
   <div class="sidebar-info">
     <div class="label">状态</div>
@@ -58,7 +64,7 @@
       <button class="doc-btn" id="docFullscreenBtn" onclick="toggleSlideViewer()" style="display:none" title="全屏幻灯片 (↑↓翻页)">&#9974; 全屏</button>
       <button class="doc-btn" id="docDownloadBtn" onclick="downloadDoc()" title="下载文件">&#11015; 下载</button>
       <button class="doc-btn" id="docEditBtn" onclick="editDoc()">编辑</button>
-      <button class="doc-btn danger" onclick="deleteDoc()">删除</button>
+      <button class="doc-btn danger" id="docDeleteBtn" onclick="deleteDoc()">删除</button>
     </div>
   </div>
   <div class="doc-content" id="docContentArea"><div class="doc-content-inner" id="docContentInner"></div></div>
@@ -153,6 +159,6 @@
 <script src="/static/js/chat.js?v=1794588073"></script>
 <script src="/static/js/upload.js?v=1794468933"></script>
 <script src="/static/js/mode.js?v=1792643367"></script>
-<script src="/static/js/project.js?v=1792736080"></script>
+<script src="/static/js/project.js?v=1794816210"></script>
 </body>
 </html>

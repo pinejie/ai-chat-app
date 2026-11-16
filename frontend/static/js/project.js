@@ -22,24 +22,148 @@ function switchSidebarTab(tab) {
   document.getElementById('newChatBtn').style.display = tab === 'chat' ? '' : 'none';
   var toolbar = document.querySelector('.project-toolbar');
   if (toolbar) toolbar.style.display = tab === 'projects' ? 'flex' : 'none';
+  var filter = document.getElementById('projectFilter');
+  if (filter) filter.style.display = tab === 'projects' ? 'flex' : 'none';
+  if (tab !== 'projects') {
+    // 切回对话时把快捷入口/根提示一起收掉，否则会压在新列表上
+    ['projectLinks', 'projectRootLabel'].forEach(function (id) {
+      var el = document.getElementById(id);
+      if (el) el.style.display = 'none';
+    });
+  }
   if (tab === 'projects') loadProjects();
 }
 
 // --- Project Documents ---
 let currentDocPath = '';
 let currentFolder = '';
+let docsOnly = false;   // 「只看文档」开关，跨会话条目常驻
+// 写权限来自后端白名单（project/ 与各项目 docs/）：路径 → 可写。前端只做按钮显隐，
+// 真正的拦截在后端，这里不重复推导规则。
+let writablePaths = {};
+let currentFolderCreatable = false;
 
 /**
  * Load the root-level directory listing and render the tree.
  */
 async function loadProjects() {
   try {
-    const data = await (await fetch(API + '/api/browse?rel_path=' + sessionQS())).json();
+    const data = await (await fetch(API + '/api/browse?rel_path=' + sessionQS() + docsOnlyQS())).json();
+    writablePaths = {};                       // 整棵树重画，名单一起重建
+    currentFolderCreatable = !!data.self_creatable;
     renderProjectTree(data);
+    renderDocRootLabel();
+    renderQuickLinks(data);
+    updateToolbarState();
   } catch (err) {
     console.error('Failed to load projects:', err);
   }
 }
+
+/** 工具栏按钮按当前选中目录/文件的可写状态启停，避免点了才被后端拒。 */
+function updateToolbarState() {
+  var newDoc = document.getElementById('projectNewDocBtn');
+  var newFolder = document.getElementById('projectNewFolderBtn');
+  var del = document.getElementById('projectDeleteBtn');
+  var creatable = currentFolderCreatable;   // 没选目录时按根目录（只读）
+  if (newDoc) newDoc.disabled = !creatable;
+  if (newFolder) newFolder.disabled = !creatable;
+  if (del) del.disabled = !currentFolder || !writablePaths[currentFolder];
+}
+
+function isWritablePath(path) {
+  return !!writablePaths[path];
+}
+
+function docsOnlyQS() {
+  return docsOnly ? '&docs_only=true' : '';
+}
+
+/** 面板顶部的根目录提示：根已提到工作目录，得让人看出不是 project/ 了。 */
+function renderDocRootLabel() {
+  const el = document.getElementById('projectRootLabel');
+  if (!el) return;
+  const dir = _currentWorkspacePath();
+  el.textContent = dir ? '根目录：' + dir : '';
+  el.title = dir;
+  el.style.display = dir ? '' : 'none';
+}
+
+function _currentWorkspacePath() {
+  const s = (typeof chatListCache !== 'undefined' ? chatListCache : [])
+    .filter(function (c) { return c.id === currentSessionId; })[0];
+  return (s && s.workspace_path) || '';
+}
+
+/** 「常用目录」快捷入口：后端在根列表里给出 shortcuts（各项目的 docs/ 等），一键直达。 */
+function renderQuickLinks(data) {
+  const el = document.getElementById('projectLinks');
+  if (!el) return;
+  el.innerHTML = '';
+  const links = data.shortcuts || [];
+  el.style.display = links.length ? '' : 'none';
+  links.forEach(function (item) {
+    const b = document.createElement('button');
+    b.className = 'pf-link';
+    b.textContent = item.label;
+    b.title = item.path;
+    b.onclick = function () { expandTo(item.path); };
+    el.appendChild(b);
+  });
+}
+
+function _cssEscape(value) {
+  return (typeof CSS !== 'undefined' && CSS.escape)
+    ? CSS.escape(value)
+    : value.replace(/([\\#.:\[\]>+~])/g, '\\$1');
+}
+
+/** 逐层展开树到指定目录（快捷入口用）。子目录是懒加载的，所以一层层等回来。 */
+async function expandTo(path) {
+  const parts = path.split('/').filter(Boolean);
+  let base = '';
+  for (let i = 0; i < parts.length; i++) {
+    base = base ? base + '/' + parts[i] : parts[i];
+    const group = document.querySelector('.proj-group[data-dir="' + _cssEscape(base) + '"]');
+    if (!group) return;
+    const header = group.querySelector(':scope > .proj-name');
+    const children = group.querySelector(':scope > .proj-files');
+    if (header && !header.classList.contains('open')) {
+      header.click();          // 触发选中 + 展开 + 懒加载
+      await _waitChildren(children);
+    }
+  }
+  const leaf = document.querySelector('.proj-group[data-dir="' + _cssEscape(path) + '"] > .proj-name');
+  if (leaf) {
+    currentFolder = path;
+    document.querySelectorAll('.proj-name').forEach(function (x) { x.classList.remove('active'); });
+    leaf.classList.add('active');
+    leaf.scrollIntoView({block: 'nearest'});
+  }
+}
+
+/** 等懒加载结束：子节点出现、或空目录/加载失败占位出现。最多 3 秒。 */
+function _waitChildren(childrenEl) {
+  return new Promise(function (resolve) {
+    const deadline = Date.now() + 3000;
+    (function poll() {
+      if (!childrenEl) return resolve();
+      if (childrenEl.querySelector('.proj-group, .proj-file') ||
+          !childrenEl.querySelector('.proj-loading') ||
+          Date.now() > deadline) {
+        return resolve();
+      }
+      setTimeout(poll, 50);
+    })();
+  });
+}
+
+function toggleDocsOnly() {
+  docsOnly = !docsOnly;
+  document.getElementById('docsOnlyBtn').classList.toggle('active', docsOnly);
+  loadProjects();
+}
+
 
 /**
  * Render the tree from a browse response.
@@ -53,16 +177,31 @@ function renderBrowseItems(data, parentEl, depth, basePath) {
   // For files at root level (depth 0), projectName is "根目录"
   // For files inside a top-level folder, projectName is that folder's name
   const projectName = (depth === 0) ? ROOT_PROJECT : basePath.split('/')[0];
+  // 可写名单由后端给出（白名单只有 project/ 和各项目 docs/），前端不重复推导规则
+  const writableDirs = data.writable_dirs || [];
+  const writableFiles = data.writable_files || [];
+  const creatableDirs = data.creatable_dirs || [];
 
   // Directories first, then files
   for (const dirName of data.dirs) {
     const dirRelPath = basePath ? basePath + '/' + dirName : dirName;
-    const node = createFolderNode(dirName, dirRelPath, projectName, depth);
+    const ok = writableDirs.indexOf(dirName) >= 0;
+    if (ok) writablePaths[dirRelPath] = true;
+    const node = createFolderNode(dirName, dirRelPath, projectName, depth, ok);
+    const creatable = creatableDirs.indexOf(dirName) >= 0;
+    // project/ 和 xxx/docs/ 自身不可删，但里面能新建，不该打「只读」标
+    node.setAttribute('data-creatable', creatable ? '1' : '0');
+    if (!ok && !creatable) {
+      const tag = node.querySelector('.ro-tag');
+      if (tag) tag.style.display = '';
+    }
     parentEl.appendChild(node);
   }
   for (const fileName of data.files) {
     const fileRelPath = basePath ? basePath + '/' + fileName : fileName;
-    const node = createFileNode(fileName, fileRelPath, projectName, depth);
+    const ok = writableFiles.indexOf(fileName) >= 0;
+    if (ok) writablePaths[fileRelPath] = true;
+    const node = createFileNode(fileName, fileRelPath, projectName, depth, ok);
     parentEl.appendChild(node);
   }
 }
@@ -70,16 +209,18 @@ function renderBrowseItems(data, parentEl, depth, basePath) {
 /**
  * Create a folder tree node. Click to expand/collapse (lazy-load on first expand).
  */
-function createFolderNode(dirName, dirRelPath, projectName, depth) {
+function createFolderNode(dirName, dirRelPath, projectName, depth, writable) {
   const group = document.createElement('div');
   group.className = 'proj-group';
   group.setAttribute('data-dir', dirRelPath);
   group.setAttribute('data-depth', depth);
+  group.setAttribute('data-writable', writable ? '1' : '0');
 
   const header = document.createElement('div');
   header.className = 'proj-name';
   header.style.paddingLeft = (12 + depth * 16) + 'px';
-  header.innerHTML = '<span class="arrow">&#9654;</span><span class="folder-icon">&#128193;</span>' + escapeHtml(dirName);
+  header.innerHTML = '<span class="arrow">&#9654;</span><span class="folder-icon">&#128193;</span>'
+    + escapeHtml(dirName) + '<span class="ro-tag" title="只读：不能删除或新建" style="display:none">只读</span>';
 
   const childrenEl = document.createElement('div');
   childrenEl.className = 'proj-files';
@@ -88,8 +229,10 @@ function createFolderNode(dirName, dirRelPath, projectName, depth) {
   header.onclick = function() {
     // 选中文件夹
     currentFolder = dirRelPath;
+    currentFolderCreatable = (group.getAttribute('data-creatable') === '1');
     document.querySelectorAll('.proj-name').forEach(function(x) { x.classList.remove('active'); });
     this.classList.add('active');
+    updateToolbarState();
     // 展开/折叠
     const isOpen = this.classList.toggle('open');
     childrenEl.classList.toggle('open', isOpen);
@@ -97,9 +240,11 @@ function createFolderNode(dirName, dirRelPath, projectName, depth) {
       // Lazy load children
       loaded = true;
       childrenEl.innerHTML = '<div class="proj-loading" style="padding:6px 12px 6px ' + (28 + depth * 16) + 'px;font-size:11px;color:var(--text4)">加载中...</div>';
-      fetch(API + '/api/browse?rel_path=' + encodeURIComponent(dirRelPath) + sessionQS())
+      fetch(API + '/api/browse?rel_path=' + encodeURIComponent(dirRelPath) + sessionQS() + docsOnlyQS())
         .then(r => r.json())
         .then(data => {
+          currentFolderCreatable = !!data.self_creatable;
+          updateToolbarState();
           childrenEl.innerHTML = '';
           if (data.dirs.length === 0 && data.files.length === 0) {
             childrenEl.innerHTML = '<div style="padding:6px 12px 6px ' + (28 + depth * 16) + 'px;font-size:11px;color:var(--text4)">空文件夹</div>';
@@ -122,13 +267,15 @@ function createFolderNode(dirName, dirRelPath, projectName, depth) {
 /**
  * Create a file tree node. Click to open in doc view.
  */
-function createFileNode(fileName, fileRelPath, projectName, depth) {
+function createFileNode(fileName, fileRelPath, projectName, depth, writable) {
   const fileEl = document.createElement('div');
   fileEl.className = 'proj-file';
   fileEl.style.paddingLeft = (28 + depth * 16) + 'px';
   fileEl.setAttribute('data-file', fileRelPath);
   fileEl.setAttribute('data-project', projectName);
-  fileEl.innerHTML = '<span class="file-icon">&#128196;</span>' + escapeHtml(fileName);
+  fileEl.setAttribute('data-writable', writable ? '1' : '0');
+  fileEl.innerHTML = '<span class="file-icon">&#128196;</span>' + escapeHtml(fileName)
+    + (writable ? '' : '<span class="ro-tag" title="只读：不能编辑或删除">只读</span>');
   fileEl.onclick = function(e) {
     e.stopPropagation();
     openDocView(fileRelPath);
@@ -172,7 +319,7 @@ function refreshDir(dirRelPath) {
   const depth = parseInt(group.getAttribute('data-depth'), 10) || 0;
   const indent = (28 + depth * 16) + 'px';
   childrenEl.innerHTML = '<div class="proj-loading" style="padding:6px 12px 6px ' + indent + ';font-size:11px;color:var(--text4)">加载中...</div>';
-  fetch(API + '/api/browse?rel_path=' + encodeURIComponent(dirRelPath) + sessionQS())
+  fetch(API + '/api/browse?rel_path=' + encodeURIComponent(dirRelPath) + sessionQS() + docsOnlyQS())
     .then(r => r.json())
     .then(data => {
       childrenEl.innerHTML = '';
@@ -342,8 +489,12 @@ async function openDocView(docPath) {
   document.getElementById('docContentArea').style.display = '';
   document.getElementById('docEditArea').style.display = 'none';
   document.getElementById('docTitle').textContent = docPath;
-  // 图片/二进制文件不能文本编辑，隐藏编辑按钮
-  document.getElementById('docEditBtn').style.display = (isImageFile(filename) || isBinaryFile(filename) || isOfficeFile(filename)) ? 'none' : '';
+  // 图片/二进制文件不能文本编辑；白名单外的文件只读，编辑/删除按钮一起藏掉
+  const readOnlyPath = !isWritablePath(docPath);
+  document.getElementById('docEditBtn').style.display =
+    (isImageFile(filename) || isBinaryFile(filename) || isOfficeFile(filename) || readOnlyPath) ? 'none' : '';
+  const delBtn = document.getElementById('docDeleteBtn');
+  if (delBtn) delBtn.style.display = readOnlyPath ? 'none' : '';
   setPreviewBtn(false);
   setFullscreenBtn(false);
   if (slideState.active) closeSlideViewer();
@@ -523,6 +674,11 @@ let modalCallback = null;
 
 function editDoc() {
   if (!currentDocPath || isEditing) return;
+  if (!isWritablePath(currentDocPath)) {
+    showConfirm('只读文件', '该文件不在可写区域，仅 project/ 与各项目 docs/ 下的内容可以编辑。', function(){});
+    document.getElementById('confirmBtn').style.display = 'none';
+    return;
+  }
   isEditing = true;
   // Fetch raw content
   fetch(API + '/api/projects/content?path=' + encodeURIComponent(currentDocPath) + sessionQS())
@@ -572,6 +728,11 @@ function downloadDoc() {
 
 function deleteDoc() {
   if (!currentDocPath) return;
+  if (!isWritablePath(currentDocPath)) {
+    showConfirm('只读文件', '该文件不在可写区域，仅 project/ 与各项目 docs/ 下的内容可以删除。', function(){});
+    document.getElementById('confirmBtn').style.display = 'none';
+    return;
+  }
   const filename = currentDocPath.split('/').pop();
   const lastSlash = currentDocPath.lastIndexOf('/');
   const parentDir = (lastSlash >= 0) ? currentDocPath.substring(0, lastSlash) : '';
@@ -593,6 +754,11 @@ function showNewFolderModal(dirPath) {
     var lastSlash2 = currentDocPath.lastIndexOf('/');
     dirPath = (lastSlash2 >= 0) ? currentDocPath.substring(0, lastSlash2) : '';
   }
+  if (!_canCreateInPath(dirPath)) {
+    showConfirm('只读位置', '只能在工作目录的 project/ 或各项目 docs/ 下新建内容。', function(){});
+    document.getElementById('confirmBtn').style.display = 'none';
+    return;
+  }
   var dirLabel = dirPath || '根目录';
 
   document.getElementById('modalTitle').textContent = '新建文件夹 - ' + dirLabel;
@@ -612,11 +778,24 @@ function showNewFolderModal(dirPath) {
   setTimeout(function() { document.getElementById('modalInput').focus(); }, 100);
 }
 
+/** 该目录里能不能新建。根目录、以及白名单外的目录都不行。 */
+function _canCreateInPath(dirPath) {
+  if (!dirPath) return false;                     // 工作目录根本身只读
+  const parts = dirPath.split('/');
+  if (parts[0] === 'project') return true;         // project/ 及其子目录
+  return parts.length >= 2 && parts[1] === 'docs'; // 项目名/docs/ 及其子目录
+}
+
 function showNewDocModal(dirPath) {
   if (dirPath === undefined) {
     if (!currentDocPath) { showConfirm('提示', '请先选择一个文件', function(){}); document.getElementById('confirmBtn').style.display = 'none'; return; }
     var lastSlash2 = currentDocPath.lastIndexOf('/');
     dirPath = (lastSlash2 >= 0) ? currentDocPath.substring(0, lastSlash2) : '';
+  }
+  if (!_canCreateInPath(dirPath)) {
+    showConfirm('只读位置', '只能在工作目录的 project/ 或各项目 docs/ 下新建内容。', function(){});
+    document.getElementById('confirmBtn').style.display = 'none';
+    return;
   }
   const dirLabel = dirPath || '根目录';
 
@@ -725,6 +904,12 @@ function projectNewFolder() {
 function projectDelete() {
   if (!currentFolder) {
     showConfirm('提示', '请先选择要删除的文件夹', function(){});
+    document.getElementById('confirmBtn').style.display = 'none';
+    return;
+  }
+  // 白名单外的目录（代码库、根上文件所在目录）后端会拒，这里先说清楚，省得白点一趟
+  if (!isWritablePath(currentFolder)) {
+    showConfirm('只读位置', '「' + currentFolder + '」不在可写区域，仅 project/ 与各项目 docs/ 下的内容可以删除。', function(){});
     document.getElementById('confirmBtn').style.display = 'none';
     return;
   }

@@ -547,70 +547,143 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str):
 
 # ─── Routes: Projects ─────────────────────────────────────────────────────────
 
-ROOT_GROUP = "根目录"  # project/ 根层散落文件的虚拟分组名
+ROOT_GROUP = "根目录"  # 工作目录根层散落文件的虚拟分组名
+
+# 目录列表里屏蔽的噪音目录（点号开头的已统一跳过，这里补几个非点号但同样是产物的）
+NOISE_DIRS = {"node_modules", "__pycache__", "venv", "dist", "build", "target"}
+
+# 「只看文档」用的文档类扩展名
+DOC_EXTS = {".md", ".docx", ".doc", ".pdf", ".xlsx", ".xls", ".pptx", ".ppt"}
+# 文档探测时最多看这么多文件，防止在超大目录里扫盘
+DOC_PROBE_BUDGET = 20000
+
+# 文本预览上限：工作目录里有几十上百 MB 的二进制，整读进内存会拖垮后端
+MAX_TEXT_PREVIEW_BYTES = 2 * 1024 * 1024
+
+# 写权限白名单：project/ 下的内容、以及各项目 docs/ 下的内容。其余位置只读。
+WRITABLE_ROOT_DIR = "project"
+WRITABLE_SUB_DIR = "docs"
 
 
-def _validate_project_path(project_name: str, filename: str) -> Path:
-    """Validate and resolve a project file path. Supports subfolder paths (project_name may contain '/')."""
-    if '..' in project_name or '..' in filename or '\\' in filename:
-        raise HTTPException(400, "Invalid path")
-    project_root = Path(WORKSPACE_DIR) / "project"
-    if project_name == ROOT_GROUP:
-        file_path = project_root / filename
-    else:
-        file_path = project_root / project_name / filename
-    try:
-        file_path.resolve().relative_to(project_root.resolve())
-    except ValueError:
-        raise HTTPException(400, "Invalid path")
-    return file_path
+def _docs_root(session: str = "") -> Path:
+    """文档 API 的根＝对话所属工作目录本身（不是它下面的 project/）。
 
-
-
-
-
-def _project_root(session: str = "") -> Path:
-    """文档/项目 API 的根：跟随指定对话的工作目录快照；不带 session 用全局默认。"""
-    return Path(_session_workspace_path(session)) / "project"
+    生成的文档大量散在项目内（xxx/docs/、CLAUDE.md 等），限定在 project/ 里看不到，
+    所以根提到工作目录；写权限由白名单收窄，见 _is_writable。
+    """
+    return Path(_session_workspace_path(session))
 
 
 def _resolve_path(path: str, session: str = "") -> Path:
-    """Resolve a path relative to project/ root. Validates no path traversal."""
+    """Resolve a path relative to the workspace root. Validates no path traversal."""
     if '..' in path or '\\' in path:
         raise HTTPException(400, "Invalid path")
-    project_root = _project_root(session)
-    file_path = project_root / path
+    docs_root = _docs_root(session)
+    file_path = docs_root / path
     try:
-        file_path.resolve().relative_to(project_root.resolve())
+        file_path.resolve().relative_to(docs_root.resolve())
     except ValueError:
         raise HTTPException(400, "Invalid path")
     return file_path
 
+
 def _resolve_dir(dir: str, session: str = "") -> Path:
-    """Resolve a parent directory (relative to project/) and ensure it stays inside project/.
+    """Resolve a parent directory (relative to the workspace root) and ensure it stays inside it.
     注意：Path 的 `/` 遇到绝对路径会直接替换前缀，必须 resolve 后再校验。"""
     if '..' in dir or '\\' in dir:
         raise HTTPException(400, "Invalid directory path")
-    project_root = _project_root(session)
-    target_dir = (project_root / dir) if dir else project_root
+    docs_root = _docs_root(session)
+    target_dir = (docs_root / dir) if dir else docs_root
     try:
-        target_dir.resolve().relative_to(project_root.resolve())
+        target_dir.resolve().relative_to(docs_root.resolve())
     except ValueError:
         raise HTTPException(400, "Invalid directory path")
     return target_dir
 
 
+def _relative_parts(target: Path, session: str = "") -> tuple:
+    """把绝对路径拆成相对工作目录根的段；越界直接 400。"""
+    docs_root = _docs_root(session).resolve()
+    try:
+        rel = target.resolve().relative_to(docs_root)
+    except ValueError:
+        raise HTTPException(400, "Invalid path")
+    return rel.parts
+
+
+def _is_writable(target: Path, session: str = "") -> bool:
+    """写权限白名单：只有 project/ 下的内容、以及各项目 docs/ 下的内容可写（改/删/建）。
+
+    面板的根放开到整个工作目录后，代码仓库和根文件都看得见了；写入口必须收窄，
+    否则一次误删就能带走整个仓库或 CLAUDE.md。工作目录其余部分一律只读。
+
+    注意「目录自身」不算：project/ 和 xxx/docs/ 这两个目录本身不放进白名单，
+    免得把整个文档目录端掉。
+    """
+    parts = _relative_parts(target, session)
+    if not parts:
+        return False
+    if parts[0] == WRITABLE_ROOT_DIR:
+        return len(parts) >= 2
+    return len(parts) >= 3 and parts[1] == WRITABLE_SUB_DIR
+
+
+def _require_writable(target: Path, session: str = "") -> None:
+    if not _is_writable(target, session):
+        raise HTTPException(403, "该位置只读：仅允许修改 project/ 与各项目 docs/ 下的内容")
+
+
+def _can_create_in(target_dir: Path, session: str = "") -> bool:
+    """这个目录里能不能新建东西。
+
+    比 _is_writable 宽一格：`project/` 和 `xxx/docs/` 这两个目录自身不算可写
+    （不能整个端掉），但在它们里面新建是允许的。
+    """
+    parts = _relative_parts(target_dir, session)
+    if not parts:
+        return False
+    if parts[0] == WRITABLE_ROOT_DIR:
+        return True
+    return len(parts) >= 2 and parts[1] == WRITABLE_SUB_DIR
+
+
+def _require_can_create_in(target_dir: Path, session: str = "") -> None:
+    if not _can_create_in(target_dir, session):
+        raise HTTPException(403, "该位置只读：仅允许在 project/ 与各项目 docs/ 下新建内容")
+
+
+def _has_doc_file(target: Path) -> bool:
+    """目录里（含子目录）是否存在文档类文件。用于「只看文档」过滤。
+
+    带文件数预算：超大目录（node_modules 之类）扫到上限就停，避免拖慢列表接口。
+    """
+    seen = 0
+    for root, dirnames, filenames in os.walk(target):
+        dirnames[:] = [d for d in dirnames if not d.startswith('.') and d not in NOISE_DIRS]
+        for name in filenames:
+            seen += 1
+            if seen > DOC_PROBE_BUDGET:
+                return False
+            if not name.startswith('.') and Path(name).suffix.lower() in DOC_EXTS:
+                return True
+    return False
+
+
 @app.get("/api/browse")
-def browse_directory(rel_path: str = "", session: str = ""):
-    """Browse a directory under project/. Returns files + subdirectories.
-    rel_path is relative to project/ root. Empty string = root."""
-    project_root = _project_root(session)
-    if not project_root.exists():
+def browse_directory(rel_path: str = "", session: str = "", docs_only: bool = False):
+    """Browse a directory under the workspace root. Returns files + subdirectories.
+
+    rel_path 相对工作目录根，空串＝根。docs_only=True 时只留文档类文件、
+    以及内部含文档的子目录（「只看文档」开关）。
+    根层额外返回 shortcuts：「常用目录」快捷入口，避免一层层点进项目里找 docs/。
+    """
+    docs_root = _docs_root(session)
+    if not docs_root.exists():
         return {"files": [], "dirs": []}
 
-    target = project_root / rel_path if rel_path else project_root
+    target = docs_root / rel_path if rel_path else docs_root
     try:
-        target.resolve().relative_to(project_root.resolve())
+        target.resolve().relative_to(docs_root.resolve())
     except ValueError:
         raise HTTPException(400, "Invalid path")
     if not target.exists() or not target.is_dir():
@@ -619,27 +692,56 @@ def browse_directory(rel_path: str = "", session: str = ""):
     files = []
     dirs = []
     for item in sorted(target.iterdir()):
-        if item.name.startswith('.'):
+        if item.name.startswith('.') or item.name in NOISE_DIRS:
             continue
         if item.is_file():
+            if docs_only and item.suffix.lower() not in DOC_EXTS:
+                continue
             files.append(item.name)
         elif item.is_dir():
+            if docs_only and not _has_doc_file(item):
+                continue
             dirs.append(item.name)
-    return {"files": files, "dirs": dirs}
+
+    # 前端不用自己推导白名单规则，读接口把结论一起带出去（写接口仍会独立校验一次）
+    writable_dirs = [n for n in dirs if _is_writable(target / n, session)]
+    writable_files = [n for n in files if _is_writable(target / n, session)]
+    creatable_dirs = [n for n in dirs if _can_create_in(target / n, session)]
+
+    shortcuts = []
+    if not rel_path:
+        if "project" in dirs:
+            shortcuts.append({"label": "项目文档", "path": "project"})
+        for name in dirs:
+            if name == "project":
+                continue
+            if (target / name / "docs").is_dir():
+                shortcuts.append({"label": name + "/docs", "path": name + "/docs"})
+    return {
+        "files": files,
+        "dirs": dirs,
+        "shortcuts": shortcuts,
+        "writable_dirs": writable_dirs,
+        "writable_files": writable_files,
+        # creatable_dirs：能进去新建东西的目录（project/ 和 xxx/docs/ 自身，虽然它们本身不可写）
+        "creatable_dirs": creatable_dirs,
+        "self_writable": _is_writable(target, session),
+        "self_creatable": _can_create_in(target, session),
+    }
 
 
 @app.get("/api/projects")
 def list_projects(session: str = ""):
-    project_root = _project_root(session)
-    if not project_root.exists():
+    docs_root = _docs_root(session)
+    if not docs_root.exists():
         return {}
     result = {}
-    for proj_dir in sorted(project_root.iterdir()):
-        if proj_dir.is_dir() and not proj_dir.name.startswith('.'):
+    for proj_dir in sorted(docs_root.iterdir()):
+        if proj_dir.is_dir() and not proj_dir.name.startswith('.') and proj_dir.name not in NOISE_DIRS:
             files = [f.name for f in sorted(proj_dir.iterdir()) if f.is_file() and not f.name.startswith('.')]
             result[proj_dir.name] = files
-    # project/ 根层散落文件（不在任何子目录里）
-    root_files = [f.name for f in sorted(project_root.iterdir()) if f.is_file() and not f.name.startswith('.')]
+    # 工作目录根层散落文件（不在任何子目录里）
+    root_files = [f.name for f in sorted(docs_root.iterdir()) if f.is_file() and not f.name.startswith('.')]
     if root_files:
         result[ROOT_GROUP] = root_files
     return result
@@ -660,6 +762,9 @@ def get_project_file_content(path: str, session: str = ""):
     file_path = _resolve_path(path, session)
     if not file_path.exists() or not file_path.is_file():
         raise HTTPException(404, "File not found")
+    # 工作目录里有大二进制（jar/zip/db），整读进内存会拖垮后端，也给前端塞一坨乱码
+    if file_path.stat().st_size > MAX_TEXT_PREVIEW_BYTES:
+        raise HTTPException(413, f"文件超过 {MAX_TEXT_PREVIEW_BYTES // (1024 * 1024)}MB，请下载后查看")
     return {"filename": file_path.name, "content": file_path.read_text(encoding="utf-8", errors="replace")}
 
 
@@ -678,6 +783,7 @@ def update_project_file(path: str, body: dict, session: str = ""):
     file_path = _resolve_path(path, session)
     if not file_path.exists():
         raise HTTPException(404, "File not found")
+    _require_writable(file_path, session)
     file_path.write_text(body.get("content", ""), encoding="utf-8")
     return {"ok": True, "filename": file_path.name}
 
@@ -685,9 +791,12 @@ def update_project_file(path: str, body: dict, session: str = ""):
 @app.delete("/api/projects/content")
 def delete_project_file(path: str, session: str = ""):
     file_path = _resolve_path(path, session)
-    # 防止 path="" 或 "." 时 rmtree 整个 project/ 根目录
-    if file_path.resolve() == _project_root(session).resolve():
-        raise HTTPException(400, "Cannot delete project root")
+    docs_root = _docs_root(session)
+    # 防止 path="" 或 "." 时 rmtree 整个工作目录
+    if file_path.resolve() == docs_root.resolve():
+        raise HTTPException(400, "Cannot delete workspace root")
+    # 白名单外一律只读：代码仓库、根上的 CLAUDE.md 都不能从面板删
+    _require_writable(file_path, session)
     if not file_path.exists():
         raise HTTPException(404, "File not found")
     if file_path.is_dir():
@@ -699,7 +808,7 @@ def delete_project_file(path: str, session: str = ""):
 
 @app.post("/api/projects/folder")
 def create_project_folder(dir: str = "", body: dict = None, session: str = ""):
-    """Create a new folder. dir = parent directory relative to project/ root."""
+    """Create a new folder. dir = parent directory relative to the workspace root."""
     if '..' in dir or '\\' in dir:
         raise HTTPException(400, "Invalid directory path")
     name = (body or {}).get("name", "").strip()
@@ -708,6 +817,7 @@ def create_project_folder(dir: str = "", body: dict = None, session: str = ""):
     if '..' in name or '/' in name or '\\' in name:
         raise HTTPException(400, "Invalid folder name")
     target_dir = _resolve_dir(dir, session)
+    _require_can_create_in(target_dir, session)
     folder_path = target_dir / name
     if folder_path.exists():
         raise HTTPException(409, "Folder already exists")
@@ -717,7 +827,7 @@ def create_project_folder(dir: str = "", body: dict = None, session: str = ""):
 
 @app.post("/api/projects/content")
 def create_project_file(dir: str = "", body: dict = None, session: str = ""):
-    """Create a new file. dir = relative directory path from project/ root."""
+    """Create a new file. dir = relative directory path from the workspace root."""
     filename = (body or {}).get("filename", "").strip()
     content_text = (body or {}).get("content", "")
     if not filename:
@@ -727,6 +837,7 @@ def create_project_file(dir: str = "", body: dict = None, session: str = ""):
     if not filename.endswith('.md'):
         filename += '.md'
     target_dir = _resolve_dir(dir, session)
+    _require_can_create_in(target_dir, session)
     target_dir.mkdir(parents=True, exist_ok=True)
     file_path = target_dir / filename
     if file_path.exists():

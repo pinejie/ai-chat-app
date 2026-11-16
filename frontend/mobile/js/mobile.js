@@ -1063,7 +1063,8 @@
   }
 
   function renderDocs(d) {
-    el.docsPath.textContent = 'project/' + (docTrail ? docTrail + '/' : '');
+    // 根已提到工作目录本身（不只 project/），路径提示不能再硬编 project/ 前缀
+    el.docsPath.textContent = docTrail ? docTrail + '/' : '工作目录根';
     el.docsList.innerHTML = '';
     const dirs = d.dirs || [], files = d.files || [];
     if (!dirs.length && !files.length) {

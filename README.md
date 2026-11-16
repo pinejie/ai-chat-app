@@ -14,7 +14,7 @@
 - **模型选择** — 每个对话可单独选择模型（默认 / sonnet / opus / haiku / fable，也可通过 `CLAUDE_MODEL_OPTIONS` 追加完整模型名）
 - **标题保护** — 用户手动改名后系统不再自动覆盖，向后兼容旧数据
 - **文件上传** — 支持图片、PDF、文本、代码文件上传，文件路径自动注入 Claude 上下文
-- **项目文档管理** — 浏览、查看、创建、编辑、删除 `project/` 目录下的文件，支持子目录、新建文件夹、递归删除文件夹、图片预览、附件下载；文件操作工具栏仅在「项目文档」标签页下显示
+- **项目文档管理** — 浏览整个对话工作目录（不限于 `project/`），支持子目录、图片预览、附件下载、「只看文档」过滤与常用目录快捷入口；**写权限收在白名单内**：只有 `project/` 与各项目 `docs/` 下的内容可新建、编辑、删除，其余位置一律只读；文件操作工具栏仅在「项目文档」标签页下显示
 - **Office 文档预览** — 通过 LibreOffice 将 pptx/docx/xlsx 转 PDF 在线预览，带缓存
 - **幻灯片浏览** — 演示文稿按页渲染为 PNG，支持翻页浏览（依赖 PyMuPDF）
 - **七种权限模式** — 默认 / manual / 自动编辑 / 自动 / 不询问 / 计划模式 / 无限制，详见下文
@@ -66,7 +66,18 @@ ai-chat-app/
 
 后端桥接 Claude Code CLI，通过子进程调用 `claude -p --output-format stream-json`，将流式输出通过 WebSocket 推送给前端。前端为纯静态文件，由后端托管。
 
-项目文档功能读写的是 `WORKSPACE_DIR/project/` 目录，所有路径都会校验，禁止越出该目录。
+项目文档功能读写的是对话所属工作目录（`WORKSPACE_DIR` 或其快照）本身，所有路径都会校验，禁止越出该目录；点号开头的目录和 `node_modules`/`__pycache__` 等噪音目录不进列表。
+
+**写权限白名单**（浏览/预览/下载不受限，改和删受限）：
+
+| 路径 | 新建 | 编辑 | 删除 |
+|------|------|------|------|
+| `project/**` | ✅ | ✅ | ✅ |
+| `<项目>/docs/**` | ✅ | ✅ | ✅ |
+| `project` 与 `<项目>/docs` 目录自身 | — | — | ❌ |
+| 其余全部（代码仓库、根上的 `CLAUDE.md` 等） | ❌ | ❌ | ❌ |
+
+越界写操作返回 403。之所以要收窄：面板根放开到工作目录后，递归删除就够得着整个代码仓库和根上的说明文件。
 
 ## 访问口令与鉴权
 
@@ -136,7 +147,7 @@ cp backend/.env.example backend/.env
 | 变量 | 默认值 | 说明 |
 |------|--------|------|
 | `APP_TOKEN` | 无（必填） | 访问口令，用于登录鉴权；未设置则服务拒绝启动 |
-| `WORKSPACE_DIR` | `~/workspace` | Claude Code 工作目录，前端可修改；项目文档位于其下的 `project/` |
+| `WORKSPACE_DIR` | `~/workspace` | Claude Code 工作目录，前端可修改；项目文档的根就是该目录 |
 | `CLAUDE_MODEL_OPTIONS` | 空 | 追加到模型下拉框的完整模型名，逗号分隔，如 `claude-opus-4-5,claude-sonnet-4-5` |
 | `MAX_STORED_SESSIONS` | `50` | 最大存储对话数，超出自动淘汰最老的 |
 | `SESSION_TTL` | `3600` | 无活跃连接的会话超时时间（秒） |
@@ -194,12 +205,12 @@ cp backend/.env.example backend/.env
 | 方法 | 路径 | 说明 |
 |------|------|------|
 | `GET` | `/api/projects` | 列出所有项目目录及文件 |
-| `GET` | `/api/browse` | 浏览 `project/` 下指定目录（支持子目录） |
+| `GET` | `/api/browse` | 浏览工作目录下指定目录（`docs_only=true` 只看文档；返回 `writable_*`/`creatable_dirs` 供前端显隐按钮） |
 | `GET` | `/api/projects/content` | 获取文件内容（文本） |
 | `PUT` | `/api/projects/content` | 更新文件内容 |
 | `POST` | `/api/projects/content` | 创建新文件 |
 | `POST` | `/api/projects/folder` | 创建文件夹 |
-| `DELETE` | `/api/projects/content` | 删除文件或文件夹（文件夹递归删除） |
+| `DELETE` | `/api/projects/content` | 删除文件或文件夹（递归删除；白名单外 403） |
 | `GET` | `/api/projects/image` | 获取图片（二进制） |
 | `GET` | `/api/projects/download` | 下载文件（附件） |
 | `GET` | `/api/projects/preview` | Office 文件转 PDF 预览 |
