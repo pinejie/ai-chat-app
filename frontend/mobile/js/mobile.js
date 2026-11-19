@@ -838,11 +838,33 @@
     }
     ensureStreamBubble();   // 有内容就必须有落点，不能因为气泡缺失把回复吞掉
     if (keep) {
-      let html = '';
-      if (streamThink) html += '<details><summary class="thinking-summary">思考过程</summary><div class="thinking-content">' + safeMd(streamThink) + '</div></details>';
-      html += safeMd(streamText);
-      streamEl.innerHTML = html;
-      highlightIn(streamEl);
+      // 定稿后不再渲染思考过程：思考块淡出 150ms 后整块移除，只留正文
+      const html = streamText ? safeMd(streamText) : '';
+      const el0 = streamEl;
+      const thinkEl = el0.querySelector('details');
+      if (!html) {
+        // 只有思考没有正文：整条气泡删掉
+        if (thinkEl) {
+          thinkEl.style.transition = 'opacity 150ms ease';
+          void thinkEl.offsetHeight;
+          thinkEl.style.opacity = '0';
+          setTimeout(function() { if (el0.parentNode) el0.remove(); }, 150);
+        } else if (el0.parentNode) {
+          el0.remove();
+        }
+      } else if (thinkEl) {
+        thinkEl.style.transition = 'opacity 150ms ease';
+        void thinkEl.offsetHeight;
+        thinkEl.style.opacity = '0';
+        setTimeout(function() {
+          if (thinkEl.parentNode) thinkEl.remove();
+          el0.innerHTML = html;
+          highlightIn(el0);
+        }, 150);
+      } else {
+        el0.innerHTML = html;
+        highlightIn(el0);
+      }
     }
     streamEl = null; streamText = ''; streamThink = '';
   }

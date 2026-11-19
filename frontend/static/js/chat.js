@@ -15,6 +15,7 @@ const HISTORY_PAGE_SIZE = 40;
 const STREAM_RENDER_INTERVAL_MS = 80;
 const STREAM_TAIL_MAX = 4096;
 const SCROLL_BOTTOM_SLACK = 80;               // 距底部小于该值视为“用户还在看最新内容”
+const THINKING_FADE_MS = 150;                 // 定稿时思考块的淡出时长，之后整块移除
 
 const SESSION_HTML = `
   <div class="header"><span class="header-title">ZD Code</span></div>
@@ -653,8 +654,13 @@ function connectWS() {
                   currentAssistantEl = ctx.assistantEl;
                   finalizeStreaming(true);
                 } else if (ctx.assistantEl && (ctx.streamingText || ctx.streamingThinking)) {
-                  ctx.assistantEl.querySelector('.bubble').innerHTML =
-                    buildFinalHtml(ctx.streamingThinking, ctx.streamingText);
+                  const b = ctx.assistantEl.querySelector('.bubble');
+                  const h = buildFinalHtml(ctx.streamingThinking, ctx.streamingText);
+                  if (h) {
+                    applyFinalHtml(b, h);
+                  } else if (ctx.assistantEl.parentNode) {
+                    ctx.assistantEl.remove();
+                  }
                 }
                 ctx.isGenerating = false;
                 ctx.streamingText = ''; ctx.streamingThinking = '';
@@ -808,10 +814,15 @@ function handleMsg(msg, sid) {
     else {
       if (ctx.streamingText || ctx.streamingThinking) {
         const html = buildFinalHtml(ctx.streamingThinking, ctx.streamingText);
-        // If streaming bubble exists in DOM, update it with final content
         if (ctx.assistantEl) {
-          ctx.assistantEl.querySelector('.bubble').innerHTML = html;
-        } else {
+          const b = ctx.assistantEl.querySelector('.bubble');
+          if (html) {
+            applyFinalHtml(b, html);
+          } else if (ctx.assistantEl.parentNode) {
+            // 只有思考没有正文：整条气泡删掉
+            ctx.assistantEl.remove();
+          }
+        } else if (html) {
           ctx.finalAssistantHtml = html;
         }
       } else if (ctx.assistantEl) {
@@ -1006,33 +1017,60 @@ function updateStreamingBubble() {
 }
 
 // 定稿气泡的唯一 HTML 出口：调用点有 4 处，拼装逻辑集中在这里才不会各写一份走样。
-// 思考区在定稿后默认折叠（不带 open）：一轮结束、可以继续对话时，历史思考过程让位给正文，
-// 需要回溯时点标题展开。流式期间由 _buildThinkingEl 单独出展开态，不走这里。
+// 定稿后不再渲染思考过程——一轮结束、可以继续对话时，思考内容整块丢弃，只留正文。
+// 流式期间由 _buildThinkingEl 单独出展开态，不走这里。
+// 正文为空（模型只思考没输出正文）时返回空串，调用方据此把整条气泡删掉。
 function buildFinalHtml(thinking, text) {
-  let html = '';
-  if (thinking) {
-    html += '<details><summary class="thinking-summary">思考过程</summary>'
-         + '<div class="thinking-content">' + safeMd(thinking) + '</div></details>';
+  return text ? safeMd(text) : '';
+}
+
+// 定稿时的收尾：思考块先淡出 150ms 再移除，然后换上定稿 HTML。
+// 只有一处收尾逻辑，四条定稿路径（result / 断线补定稿 / 切会话补定稿 / 停止）都调它。
+function applyFinalHtml(bubble, html, done) {
+  done = done || function() {};
+  if (!bubble) { done(); return; }
+  const thinkEl = bubble.querySelector('details');
+  if (thinkEl && !thinkEl._fading) {
+    thinkEl._fading = true;
+    var finish = function() { if (thinkEl.parentNode) thinkEl.remove(); };
+    thinkEl.style.transition = 'opacity ' + THINKING_FADE_MS + 'ms ease';
+    // 强制一次回流，否则刚设的 transition 不会对随后的 opacity 生效
+    void thinkEl.offsetHeight;
+    thinkEl.style.opacity = '0';
+    setTimeout(function() {
+      finish();
+      bubble.innerHTML = html;
+      done();
+    }, THINKING_FADE_MS);
+    return;
   }
-  html += safeMd(text || '');
-  return html;
+  bubble.innerHTML = html;
+  done();
 }
 
 function finalizeStreaming(save) {
   cancelStreamRender();
   const hasContent = streamingText || streamingThinking;
-  if (save && currentCtx && hasContent) {
-    currentCtx.finalAssistantHtml = buildFinalHtml(streamingThinking, streamingText);
+  const html = buildFinalHtml(streamingThinking, streamingText);
+  if (save && currentCtx && html) {
+    currentCtx.finalAssistantHtml = html;
   }
   if (!currentAssistantEl || !hasContent) {
     currentAssistantEl = null; streamingText = ''; streamingThinking = '';
     if (currentCtx) currentCtx.assistantEl = null;
     return;
   }
-  currentAssistantEl.querySelector('.bubble').innerHTML = buildFinalHtml(streamingThinking, streamingText);
-  currentAssistantEl._stream = null;
+  const el = currentAssistantEl;
+  const bubble = el.querySelector('.bubble');
+  el._stream = null;
   currentAssistantEl = null; streamingText = ''; streamingThinking = '';
   if (currentCtx) currentCtx.assistantEl = null;
+  if (!html) {
+    // 只有思考、没有正文：整条气泡删掉（淡出交给 applyFinalHtml 里的思考块过渡）
+    applyFinalHtml(bubble, '', function() { if (el.parentNode) el.remove(); });
+    return;
+  }
+  applyFinalHtml(bubble, html);
 }
 
 // --- History window ---
