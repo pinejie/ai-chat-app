@@ -115,6 +115,8 @@ async function sendMessage() {
     currentCtx.assistantEl = null;
     currentCtx.isGenerating = true;
     currentCtx.finalAssistantHtml = '';
+    currentCtx.turnNodes = [];   // 新一轮开始，本轮账本清零
+    currentCtx.turnText = '';
     currentCtx.inputState.history = [...messageHistory];
     currentCtx.inputState.index = historyIndex;
     currentCtx.inputState.tempInput = tempInput;

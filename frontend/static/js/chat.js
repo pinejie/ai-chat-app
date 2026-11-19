@@ -69,6 +69,11 @@ function newSessionCtx(sid) {
     isGenerating: false,
     assistantEl: null,
     finalAssistantHtml: '',
+    // 本轮账本：一次用户发送 → 一次 result 之间产生的节点与已定稿正文。
+    // 后端一轮只落一条 assistant（整轮 text 拼接，见 claude_session.py），思考和工具不进历史，
+    // 所以「刷新后的样子」就是一个正文气泡、没有思考块和工具块。定稿时据此合并，刷新前后才一致。
+    turnNodes: [],
+    turnText: '',
     // Input state
     inputState: { history: [], index: -1, tempInput: '' },
     inputManualH: null,   // 非 null = 手动拖拽高度（px），自动增高暂停
@@ -566,6 +571,7 @@ async function switchChat(sessionId) {
     if (existingBubble) {
       currentCtx.assistantEl = existingBubble;
       currentAssistantEl = existingBubble;
+      _trackTurnNode(currentCtx, existingBubble);   // 复用旧节点也要入账，否则本轮收敛时正文丢失
     } else {
       currentCtx.assistantEl = null;
       ensureAssistantBubble();
@@ -653,14 +659,12 @@ function connectWS() {
                   streamingThinking = ctx.streamingThinking;
                   currentAssistantEl = ctx.assistantEl;
                   finalizeStreaming(true);
-                } else if (ctx.assistantEl && (ctx.streamingText || ctx.streamingThinking)) {
-                  const b = ctx.assistantEl.querySelector('.bubble');
-                  const h = buildFinalHtml(ctx.streamingThinking, ctx.streamingText);
-                  if (h) {
-                    applyFinalHtml(b, h);
-                  } else if (ctx.assistantEl.parentNode) {
-                    ctx.assistantEl.remove();
-                  }
+                } else {
+                  // 非当前会话：同样按本轮收敛，切回去就是刷新后的形态
+                  if (ctx.streamingText) ctx.turnText += ctx.streamingText;
+                  const total = ctx.turnText;
+                  ctx.streamingText = ''; ctx.streamingThinking = '';
+                  _collapseTurn(ctx, total);
                 }
                 ctx.isGenerating = false;
                 ctx.streamingText = ''; ctx.streamingThinking = '';
@@ -709,6 +713,8 @@ function resetStreaming() {
     currentCtx.streamingThinking = '';
     currentCtx.assistantEl = null;
     currentCtx.isGenerating = false;
+    currentCtx.turnNodes = [];
+    currentCtx.turnText = '';
   }
   showStopBtn(false);
 }
@@ -790,8 +796,11 @@ function handleMsg(msg, sid) {
         if (isCurrent) {
           streamingText = st; streamingThinking = sth;
           ctx.streamingText = st; ctx.streamingThinking = sth;
-          finalizeStreaming(false);
+          _finalizeSegmentInPlace();   // 中途定稿：就地收掉当前这段，正文并入本轮累计
           addToolMsg(block.name, block.input ? JSON.stringify(block.input, null, 2) : '');
+        } else if (st) {
+          // 非当前会话没有 DOM，但正文仍要按轮累计，切过去时才和刷新后一致
+          ctx.turnText += st;
         }
         st = ''; sth = '';
       }
@@ -812,23 +821,13 @@ function handleMsg(msg, sid) {
   if (msg.type === 'result') {
     if (isCurrent) { finalizeStreaming(true); showStopBtn(false); }
     else {
-      if (ctx.streamingText || ctx.streamingThinking) {
-        const html = buildFinalHtml(ctx.streamingThinking, ctx.streamingText);
-        if (ctx.assistantEl) {
-          const b = ctx.assistantEl.querySelector('.bubble');
-          if (html) {
-            applyFinalHtml(b, html);
-          } else if (ctx.assistantEl.parentNode) {
-            // 只有思考没有正文：整条气泡删掉
-            ctx.assistantEl.remove();
-          }
-        } else if (html) {
-          ctx.finalAssistantHtml = html;
-        }
-      } else if (ctx.assistantEl) {
-        // No content — remove empty bubble
-        ctx.assistantEl.remove();
-      }
+      // 非当前会话：后台跑完，按本轮收敛；本会话可能还没建过 DOM 节点，
+      // 正文另存 finalAssistantHtml，切过去时才能补出刷新后的那种气泡。
+      if (ctx.streamingText) ctx.turnText += ctx.streamingText;
+      const total = ctx.turnText;
+      ctx.streamingText = ''; ctx.streamingThinking = '';
+      if (total.trim()) ctx.finalAssistantHtml = safeMd(total);
+      _collapseTurn(ctx, total);
     }
     ctx.isGenerating = false;
     ctx.streamingText = ''; ctx.streamingThinking = ''; ctx.assistantEl = null;
@@ -837,13 +836,21 @@ function handleMsg(msg, sid) {
   }
   if (msg.type === 'stopped') {
     if (isCurrent) { finalizeStreaming(false); showStopBtn(false); addStoppedMsg(); }
-    else if (ctx.assistantEl) { ctx.assistantEl.remove(); }
+    else {
+      if (ctx.streamingText) ctx.turnText += ctx.streamingText;
+      if (ctx.turnText.trim()) ctx.finalAssistantHtml = safeMd(ctx.turnText);
+      _collapseTurn(ctx, ctx.turnText);
+    }
     ctx.isGenerating = false; ctx.streamingText = ''; ctx.streamingThinking = ''; ctx.assistantEl = null;
     return;
   }
   if (msg.type === 'error') {
     if (isCurrent) { finalizeStreaming(false); showStopBtn(false); addSystemMsg(msg.content || 'Unknown error'); }
-    else if (ctx.assistantEl) { ctx.assistantEl.remove(); }
+    else {
+      if (ctx.streamingText) ctx.turnText += ctx.streamingText;
+      if (ctx.turnText.trim()) ctx.finalAssistantHtml = safeMd(ctx.turnText);
+      _collapseTurn(ctx, ctx.turnText);
+    }
     ctx.isGenerating = false; ctx.streamingText = ''; ctx.streamingThinking = ''; ctx.assistantEl = null;
     return;
   }
@@ -871,8 +878,61 @@ function ensureAssistantBubble() {
     currentAssistantEl.innerHTML = '<div class="bubble"></div>';
     currentCtx.messagesInner.appendChild(currentAssistantEl);
     currentCtx.assistantEl = currentAssistantEl;
+    _trackTurnNode(currentCtx, currentAssistantEl);
     scrollBottom();
   }
+}
+
+// --- 本轮账本 ---
+// 登记本轮产生的气泡，定稿时整批收敛成一个正文气泡（等价于刷新后的形态）。
+function _trackTurnNode(ctx, el) {
+  if (!ctx || !el) return;
+  if (ctx.turnNodes.indexOf(el) !== -1) return;
+  ctx.turnNodes.push(el);
+}
+
+// 把一轮的产物收敛成「刷新后」的形态：一个 assistant 气泡，正文 = 本轮全部 text 依次拼接。
+// 只有思考没有正文时一个气泡都不留（后端同样不落这条历史）。
+function _collapseTurn(ctx, totalText, done) {
+  done = done || function () {};
+  if (!ctx) { done(); return; }
+  // 当前气泡若没登记（切会话复用旧节点等边缘路径），补登，否则正文会被一并丢掉。
+  if (ctx.assistantEl && ctx.assistantEl.parentNode) _trackTurnNode(ctx, ctx.assistantEl);
+  const nodes = ctx.turnNodes.filter(function (n) { return n && n.parentNode; });
+  ctx.turnNodes = [];
+  ctx.turnText = '';
+  if (!nodes.length) { done(); return; }
+  // 按 DOM 顺序排，第一个节点就是插入位
+  nodes.sort(function (a, b) {
+    return (a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING) ? -1 : 1;
+  });
+  const anchor = nodes[0];
+  const body = totalText == null ? '' : String(totalText);
+
+  const apply = function () {
+    if (!body.trim()) {
+      nodes.forEach(function (n) { if (n.parentNode) n.remove(); });
+      done();
+      return;
+    }
+    const el = document.createElement('div');
+    el.className = 'msg msg-assistant';
+    el.innerHTML = '<div class="bubble">' + safeMd(body) + '</div>';
+    if (anchor.parentNode) anchor.parentNode.insertBefore(el, anchor);
+    nodes.forEach(function (n) { if (n.parentNode) n.remove(); });
+    done();
+  };
+
+  // 思考块先淡出再收敛；本轮没有思考块就直接收敛
+  const thinkEls = [];
+  nodes.forEach(function (n) {
+    n.querySelectorAll('details').forEach(function (d) { thinkEls.push(d); });
+  });
+  if (!thinkEls.length) { apply(); return; }
+  thinkEls.forEach(function (d) { d.style.transition = 'opacity ' + THINKING_FADE_MS + 'ms ease'; });
+  void anchor.offsetHeight;   // 强制回流，否则新设的 transition 对随后的 opacity 不生效
+  thinkEls.forEach(function (d) { d.style.opacity = '0'; });
+  setTimeout(apply, THINKING_FADE_MS);
 }
 
 // 流式渲染节流：assistant 事件按内容块到达，不节流的话每次都要把累计全文重新 parse + sanitize。
@@ -1016,61 +1076,46 @@ function updateStreamingBubble() {
   }, STREAM_RENDER_INTERVAL_MS);
 }
 
-// 定稿气泡的唯一 HTML 出口：调用点有 4 处，拼装逻辑集中在这里才不会各写一份走样。
-// 定稿后不再渲染思考过程——一轮结束、可以继续对话时，思考内容整块丢弃，只留正文。
-// 流式期间由 _buildThinkingEl 单独出展开态，不走这里。
-// 正文为空（模型只思考没输出正文）时返回空串，调用方据此把整条气泡删掉。
-function buildFinalHtml(thinking, text) {
-  return text ? safeMd(text) : '';
-}
-
-// 定稿时的收尾：思考块先淡出 150ms 再移除，然后换上定稿 HTML。
-// 只有一处收尾逻辑，四条定稿路径（result / 断线补定稿 / 切会话补定稿 / 停止）都调它。
-function applyFinalHtml(bubble, html, done) {
-  done = done || function() {};
-  if (!bubble) { done(); return; }
-  const thinkEl = bubble.querySelector('details');
-  if (thinkEl && !thinkEl._fading) {
-    thinkEl._fading = true;
-    var finish = function() { if (thinkEl.parentNode) thinkEl.remove(); };
-    thinkEl.style.transition = 'opacity ' + THINKING_FADE_MS + 'ms ease';
-    // 强制一次回流，否则刚设的 transition 不会对随后的 opacity 生效
-    void thinkEl.offsetHeight;
-    thinkEl.style.opacity = '0';
-    setTimeout(function() {
-      finish();
-      bubble.innerHTML = html;
-      done();
-    }, THINKING_FADE_MS);
+// 中途定稿：工具调用前把当前这段就地收掉（去思考、留正文），执行过程的观感与原来一致。
+// 与旧版唯一的区别是正文要并入本轮累计，最后收敛时才不会丢。
+function _finalizeSegmentInPlace() {
+  const ctx = currentCtx;
+  const el = currentAssistantEl;
+  if (ctx && ctx.streamingText) ctx.turnText += ctx.streamingText;
+  const html = streamingText ? safeMd(streamingText) : '';
+  currentAssistantEl = null; streamingText = ''; streamingThinking = '';
+  if (ctx) {
+    ctx.streamingText = ''; ctx.streamingThinking = ''; ctx.assistantEl = null;
+  }
+  if (!el || !el.parentNode) return;
+  if (!html) {
+    // 只有思考没有正文的中间段：不留空壳，从本轮账本里一并摘掉
+    if (ctx) {
+      const i = ctx.turnNodes.indexOf(el);
+      if (i !== -1) ctx.turnNodes.splice(i, 1);
+    }
+    el.remove();
     return;
   }
-  bubble.innerHTML = html;
-  done();
+  el._stream = null;
+  el.querySelector('.bubble').innerHTML = html;
 }
 
+// 一轮定稿：把本轮所有文本并成一段，收敛成刷新后的形态（一个正文气泡）。
 function finalizeStreaming(save) {
   cancelStreamRender();
-  const hasContent = streamingText || streamingThinking;
-  const html = buildFinalHtml(streamingThinking, streamingText);
-  if (save && currentCtx && html) {
-    currentCtx.finalAssistantHtml = html;
+  const ctx = currentCtx;
+  if (ctx && ctx.streamingText) ctx.turnText += ctx.streamingText;
+  const totalText = ctx ? ctx.turnText : '';
+
+  if (save && ctx && totalText.trim()) {
+    ctx.finalAssistantHtml = safeMd(totalText);
   }
-  if (!currentAssistantEl || !hasContent) {
-    currentAssistantEl = null; streamingText = ''; streamingThinking = '';
-    if (currentCtx) currentCtx.assistantEl = null;
-    return;
-  }
-  const el = currentAssistantEl;
-  const bubble = el.querySelector('.bubble');
-  el._stream = null;
   currentAssistantEl = null; streamingText = ''; streamingThinking = '';
-  if (currentCtx) currentCtx.assistantEl = null;
-  if (!html) {
-    // 只有思考、没有正文：整条气泡删掉（淡出交给 applyFinalHtml 里的思考块过渡）
-    applyFinalHtml(bubble, '', function() { if (el.parentNode) el.remove(); });
-    return;
+  if (ctx) {
+    ctx.streamingText = ''; ctx.streamingThinking = ''; ctx.assistantEl = null;
+    _collapseTurn(ctx, totalText);
   }
-  applyFinalHtml(bubble, html);
 }
 
 // --- History window ---
@@ -1102,6 +1147,8 @@ function renderHistoryWindow(ctx, reset) {
     ctx.messagesInner.innerHTML = '';
     ctx.loadEarlierEl = null;
     ctx.assistantEl = null;
+    ctx.turnNodes = [];   // DOM 被重建，旧账本里的节点都失效了
+    ctx.turnText = '';
     ctx.historyStart = Math.max(0, history.length - HISTORY_PAGE_SIZE);
     const frag = document.createDocumentFragment();
     for (let i = ctx.historyStart; i < history.length; i++) {
@@ -1193,7 +1240,9 @@ function addToolMsg(name, content) {
   let inner = '<div class="bubble"><span class="tool-name">[' + escapeHtml(name) + ']</span>';
   if (content) { const d = content.length > 500 ? content.slice(0, 500) + '...' : content; inner += '<pre>' + escapeHtml(d) + '</pre>'; }
   inner += '</div>'; el.innerHTML = inner;
-  currentCtx.messagesInner.appendChild(el); scrollBottom();
+  currentCtx.messagesInner.appendChild(el);
+  _trackTurnNode(currentCtx, el);   // 工具块只在本轮存在，定稿时随本轮一起收敛掉
+  scrollBottom();
 }
 function addSystemMsg(text) {
   if (!currentCtx) return;

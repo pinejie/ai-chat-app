@@ -26,6 +26,9 @@
   let connected = false;
   let generating = false;
   let streamText = '', streamThink = '', streamEl = null;
+  // 本轮账本：后端一轮只落一条 assistant（整轮 text 拼接，思考和工具不进历史），
+  // 所以「刷新后的样子」就是一个正文气泡。定稿时据此合并，刷新前后才一致。
+  let turnNodes = [], turnText = '';
   let picked = [];                       // 待发送的 File 列表
   let modelOptions = ['default'];
   let curMode = 'manual', curModel = 'default';
@@ -645,6 +648,7 @@
     ws = null; connected = false;
     generating = false;
     streamText = ''; streamThink = ''; streamEl = null;
+    turnNodes = []; turnText = '';
     setConn('idle'); setGenerating(false);
   }
 
@@ -778,8 +782,45 @@
 
   function commitStream() {
     if (!streamText && !streamThink) return;
-    finalize(true);
-    streamText = ''; streamThink = ''; streamEl = null;
+    if (streamText) turnText += streamText;   // 工具切换前的正文并入本轮累计
+    finalize(false);                          // 就地收掉当前这段，执行过程观感不变
+  }
+
+  /* 把一轮的产物收敛成「刷新后」的形态：一个 assistant 气泡，正文 = 本轮全部 text 依次拼接。
+     只有思考没有正文时一个气泡都不留（后端同样不落这条历史）。
+     有思考块时先淡出 150ms 再收敛，其余情况立即收敛。 */
+  function collapseTurn(totalText) {
+    const nodes = turnNodes.filter(function (n) { return n && n.parentNode; });
+    turnNodes = [];
+    turnText = '';
+    streamEl = null; streamText = ''; streamThink = '';
+    if (!nodes.length) return;
+    const anchor = nodes[0];
+    const body = totalText == null ? '' : String(totalText);
+
+    const apply = function () {
+      if (!body.trim()) {
+        nodes.forEach(function (n) { if (n.parentNode) n.remove(); });
+        return;
+      }
+      const d = document.createElement('div');
+      d.className = 'msg msg-assistant';
+      d.innerHTML = '<div class="bubble">' + safeMd(body) + '</div>';
+      if (anchor.parentNode) anchor.parentNode.insertBefore(d, anchor);
+      nodes.forEach(function (n) { if (n.parentNode) n.remove(); });
+      highlightIn(d);
+      MUI.scrollToBottom();
+    };
+
+    const thinkEls = [];
+    nodes.forEach(function (n) {
+      n.querySelectorAll('details').forEach(function (d) { thinkEls.push(d); });
+    });
+    if (!thinkEls.length) { apply(); return; }
+    thinkEls.forEach(function (d) { d.style.transition = 'opacity 150ms ease'; });
+    void anchor.offsetHeight;   // 强制回流，否则新设的 transition 对随后的 opacity 不生效
+    thinkEls.forEach(function (d) { d.style.opacity = '0'; });
+    setTimeout(apply, 150);
   }
 
   /* ---------------- 消息 DOM ---------------- */
@@ -807,7 +848,8 @@
     const body = content
       ? '<pre>' + esc(content.length > 400 ? content.slice(0, 400) + '…' : content) + '</pre>'
       : '';
-    push('msg-tool', '<span class="tool-name">' + esc(name || '工具') + '</span>' + body);
+    const d = push('msg-tool', '<span class="tool-name">' + esc(name || '工具') + '</span>' + body);
+    turnNodes.push(d);   // 工具块只在本轮存在，定稿时随本轮一起收敛掉
   }
 
   function addSystemMsg(text) { push('msg-system', esc(text)); }
@@ -816,6 +858,7 @@
   function ensureStreamBubble() {
     if (streamEl || !el.msgList) return;
     streamEl = push('msg-assistant', '<span class="typing">思考中<span class="dot">.</span><span class="dot">.</span><span class="dot">.</span></span>');
+    turnNodes.push(streamEl);
   }
 
   function updateStream() {
@@ -833,43 +876,50 @@
   function finalize(keep) {
     const has = streamText || streamThink;
     if (!has) {
-      if (streamEl) { streamEl.remove(); streamEl = null; }
+      if (streamEl) {
+        const i = turnNodes.indexOf(streamEl);
+        if (i !== -1) turnNodes.splice(i, 1);
+        streamEl.remove();
+        streamEl = null;
+      }
+      streamText = ''; streamThink = '';
       return;
     }
     ensureStreamBubble();   // 有内容就必须有落点，不能因为气泡缺失把回复吞掉
-    if (keep) {
-      // 定稿后不再渲染思考过程：思考块淡出 150ms 后整块移除，只留正文
-      const html = streamText ? safeMd(streamText) : '';
+
+    if (!keep) {
+      // 中途或中断：式样与原来一致，只把有正文的这段就地定稿
       const el0 = streamEl;
       const thinkEl = el0.querySelector('details');
+      const html = streamText ? safeMd(streamText) : '';
       if (!html) {
-        // 只有思考没有正文：整条气泡删掉
-        if (thinkEl) {
-          thinkEl.style.transition = 'opacity 150ms ease';
-          void thinkEl.offsetHeight;
-          thinkEl.style.opacity = '0';
-          setTimeout(function() { if (el0.parentNode) el0.remove(); }, 150);
-        } else if (el0.parentNode) {
-          el0.remove();
-        }
+        const i = turnNodes.indexOf(el0);
+        if (i !== -1) turnNodes.splice(i, 1);
+        el0.remove();
       } else if (thinkEl) {
-        thinkEl.style.transition = 'opacity 150ms ease';
-        void thinkEl.offsetHeight;
-        thinkEl.style.opacity = '0';
-        setTimeout(function() {
-          if (thinkEl.parentNode) thinkEl.remove();
-          el0.innerHTML = html;
-          highlightIn(el0);
-        }, 150);
+        thinkEl.remove();
+        el0.innerHTML = html;
+        highlightIn(el0);
       } else {
         el0.innerHTML = html;
         highlightIn(el0);
       }
+      streamEl = null; streamText = ''; streamThink = '';
+      return;
     }
-    streamEl = null; streamText = ''; streamThink = '';
+
+    if (streamText) turnText += streamText;
+    const total = turnText;
+    streamText = ''; streamThink = '';
+    collapseTurn(total);
   }
 
-  function clearMessages() { el.msgList.innerHTML = ''; streamEl = null; MUI.setEmptyVisible(true); }
+  function clearMessages() {
+    el.msgList.innerHTML = '';
+    streamEl = null;
+    turnNodes = []; turnText = '';
+    MUI.setEmptyVisible(true);
+  }
 
   /* ---------------- 发送 / 停止 ---------------- */
 
@@ -916,6 +966,7 @@
     el.input.value = ''; MUI.syncInput();
     addUserMsg(text);
     streamText = ''; streamThink = ''; streamEl = null;
+    turnNodes = []; turnText = '';   // 新一轮开始，本轮账本清零
     setGenerating(true);
     ensureStreamBubble();
     updateStream();
